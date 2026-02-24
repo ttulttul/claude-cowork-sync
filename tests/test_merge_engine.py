@@ -1,0 +1,66 @@
+"""Tests for high-level merge orchestration."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from claude_cowork_sync.merge_engine import merge_profiles
+
+
+def test_merge_profiles_requires_browser_state_unless_skipped(tmp_path: Path) -> None:
+    """Raises when browser merge is enabled but input state files are missing."""
+
+    profile_a = _create_minimal_profile(tmp_path / "a")
+    profile_b = _create_minimal_profile(tmp_path / "b")
+    with pytest.raises(ValueError):
+        merge_profiles(
+            profile_a=profile_a,
+            profile_b=profile_b,
+            output_profile=tmp_path / "out",
+            include_sensitive_claude_credentials=False,
+            base_source="a",
+            browser_state_a_path=None,
+            browser_state_b_path=None,
+            browser_state_output_path=None,
+            merge_indexeddb=False,
+            skip_browser_state=False,
+            force_output_overwrite=False,
+        )
+
+
+def test_merge_profiles_succeeds_with_skip_browser_state(tmp_path: Path) -> None:
+    """Merges filesystem sessions without browser-state validation when skipped."""
+
+    profile_a = _create_minimal_profile(tmp_path / "a")
+    profile_b = _create_minimal_profile(tmp_path / "b")
+    summary = merge_profiles(
+        profile_a=profile_a,
+        profile_b=profile_b,
+        output_profile=tmp_path / "out",
+        include_sensitive_claude_credentials=False,
+        base_source="a",
+        browser_state_a_path=None,
+        browser_state_b_path=None,
+        browser_state_output_path=None,
+        merge_indexeddb=False,
+        skip_browser_state=True,
+        force_output_overwrite=False,
+    )
+    assert summary.merged_session_count == 1
+    assert summary.validation.is_valid is True
+
+
+def _create_minimal_profile(profile: Path) -> Path:
+    """Creates a profile with one minimal session."""
+
+    session_root = profile / "local-agent-mode-sessions/user/org"
+    session_root.mkdir(parents=True, exist_ok=True)
+    metadata = {"createdAt": 1, "lastActivityAt": 2, "cliSessionId": "cli", "cwd": "/tmp"}
+    (session_root / "local_x.json").write_text(json.dumps(metadata), encoding="utf-8")
+    folder = session_root / "local_x"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "audit.jsonl").write_text("", encoding="utf-8")
+    return profile
