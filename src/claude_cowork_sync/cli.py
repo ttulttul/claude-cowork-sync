@@ -91,6 +91,11 @@ def _add_merge_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     parser.add_argument("--base-source", choices=["a", "b"], default="a", help="Base source for unknown keys.")
     parser.add_argument("--skip-browser-state", action="store_true", help="Skip LocalStorage/IndexedDB merge.")
     parser.add_argument("--skip-indexeddb", action="store_true", help="Do not merge IndexedDB stores.")
+    parser.add_argument(
+        "--include-vm-bundles",
+        action="store_true",
+        help="Include vm_bundles during remote fetch and local base profile copy (disabled by default).",
+    )
     parser.add_argument("--force", action="store_true", help="Overwrite output profile if it exists.")
     parser.add_argument(
         "--include-sensitive-claude-credentials",
@@ -180,6 +185,7 @@ def _run_merge(args: argparse.Namespace) -> int:
             merge_indexeddb=not args.skip_indexeddb,
             skip_browser_state=args.skip_browser_state,
             force_output_overwrite=args.force,
+            include_vm_bundles=args.include_vm_bundles,
         )
     result = {
         "outputProfile": str(summary.output_profile),
@@ -209,6 +215,7 @@ def _resolve_profile_b(args: argparse.Namespace, stack: ExitStack) -> Path:
             remote_host=args.merge_from,
             remote_profile_path=args.remote_profile_path,
             temp_parent=temp_parent,
+            include_vm_bundles=args.include_vm_bundles,
         )
         logger.info("Fetched remote profile to local temp path: %s", fetched)
         return fetched

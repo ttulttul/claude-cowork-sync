@@ -38,6 +38,7 @@ def fetch_remote_profile(
     remote_host: str,
     remote_profile_path: str,
     temp_parent: Optional[Path] = None,
+    include_vm_bundles: bool = False,
 ) -> Path:
     """Fetches a remote Claude profile over SSH into a local temporary directory."""
 
@@ -47,7 +48,7 @@ def fetch_remote_profile(
         raise ValueError(message)
     _ensure_ssh_available()
     target_root = _create_target_root(temp_parent=temp_parent)
-    command = ["ssh", remote_host, _build_remote_tar_command(remote_profile_path)]
+    command = ["ssh", remote_host, _build_remote_tar_command(remote_profile_path, include_vm_bundles)]
     logger.info("Fetching remote profile from %s:%s", remote_host, remote_profile_path)
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if process.stdout is None or process.stderr is None:
@@ -115,10 +116,13 @@ def _create_target_root(temp_parent: Optional[Path]) -> Path:
     return Path(mkdtemp(prefix="cowork-remote-profile-"))
 
 
-def _build_remote_tar_command(remote_profile_path: str) -> str:
+def _build_remote_tar_command(remote_profile_path: str, include_vm_bundles: bool) -> str:
     """Builds a remote shell command that streams a tar archive to stdout."""
 
     profile_expr = _remote_path_expression(remote_profile_path)
+    tar_exclude = ""
+    if not include_vm_bundles:
+        tar_exclude = ' --exclude="$BASE_NAME/vm_bundles" --exclude="$BASE_NAME/vm_bundles/*"'
     return (
         f"PROFILE_PATH={profile_expr}; "
         'if [ ! -d "$PROFILE_PATH" ]; then '
@@ -127,7 +131,7 @@ def _build_remote_tar_command(remote_profile_path: str) -> str:
         "fi; "
         'PARENT_DIR="$(dirname "$PROFILE_PATH")"; '
         'BASE_NAME="$(basename "$PROFILE_PATH")"; '
-        'tar -C "$PARENT_DIR" -cf - "$BASE_NAME"'
+        f'tar -C "$PARENT_DIR" -cf -{tar_exclude} "$BASE_NAME"'
     )
 
 

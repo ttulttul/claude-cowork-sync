@@ -22,10 +22,16 @@ def test_merge_from_with_only_host_uses_default_paths(
     fetched_profile = _create_profile(tmp_path / "fetched_profile_default")
     captured: dict[str, object] = {}
 
-    def _fake_fetch_remote_profile(remote_host: str, remote_profile_path: str, temp_parent: Path) -> Path:
+    def _fake_fetch_remote_profile(
+        remote_host: str,
+        remote_profile_path: str,
+        temp_parent: Path,
+        include_vm_bundles: bool,
+    ) -> Path:
         captured["remote_host"] = remote_host
         captured["remote_profile_path"] = remote_profile_path
         captured["temp_parent"] = temp_parent
+        captured["include_vm_bundles"] = include_vm_bundles
         return fetched_profile
 
     def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
@@ -59,6 +65,7 @@ def test_merge_from_with_only_host_uses_default_paths(
     assert Path(captured["output_profile"]).parent == Path(tempfile.gettempdir())
     assert Path(captured["output_profile"]).name.startswith("claude-cowork-merged-")
     assert captured["remote_profile_path"] == "Library/Application Support/Claude"
+    assert captured["include_vm_bundles"] is False
 
 
 def test_merge_from_uses_fetched_remote_profile(
@@ -72,9 +79,15 @@ def test_merge_from_uses_fetched_remote_profile(
     output_profile = tmp_path / "output"
     captured: dict[str, object] = {}
 
-    def _fake_fetch_remote_profile(remote_host: str, remote_profile_path: str, temp_parent: Path) -> Path:
+    def _fake_fetch_remote_profile(
+        remote_host: str,
+        remote_profile_path: str,
+        temp_parent: Path,
+        include_vm_bundles: bool,
+    ) -> Path:
         captured["remote_host"] = remote_host
         captured["temp_parent"] = temp_parent
+        captured["include_vm_bundles"] = include_vm_bundles
         return fetched_profile
 
     def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
@@ -104,6 +117,55 @@ def test_merge_from_uses_fetched_remote_profile(
 
     assert exit_code == 0
     assert captured["profile_b"] == fetched_profile
+    assert captured["include_vm_bundles"] is False
+
+
+def test_merge_from_can_include_vm_bundles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Passes include_vm_bundles=True through to remote fetch and merge engine."""
+
+    profile_a = _create_profile(tmp_path / "profile_a")
+    fetched_profile = _create_profile(tmp_path / "fetched_profile")
+    output_profile = tmp_path / "output"
+    captured: dict[str, object] = {}
+
+    def _fake_fetch_remote_profile(
+        remote_host: str,
+        remote_profile_path: str,
+        temp_parent: Path,
+        include_vm_bundles: bool,
+    ) -> Path:
+        captured["include_vm_bundles_fetch"] = include_vm_bundles
+        return fetched_profile
+
+    def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
+        captured["include_vm_bundles_merge"] = kwargs["include_vm_bundles"]
+        return MergeSummary(
+            output_profile=output_profile,
+            merged_session_count=1,
+            browser_state_output=None,
+            validation=ValidationResult([], [], []),
+        )
+
+    monkeypatch.setattr("claude_cowork_sync.cli.fetch_remote_profile", _fake_fetch_remote_profile)
+    monkeypatch.setattr("claude_cowork_sync.cli.merge_profiles", _fake_merge_profiles)
+
+    exit_code = cli.run(
+        [
+            "merge",
+            "--profile-a",
+            str(profile_a),
+            "--merge-from",
+            "user@remote",
+            "--output-profile",
+            str(output_profile),
+            "--skip-browser-state",
+            "--include-vm-bundles",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["include_vm_bundles_fetch"] is True
+    assert captured["include_vm_bundles_merge"] is True
 
 
 def _create_profile(path: Path) -> Path:

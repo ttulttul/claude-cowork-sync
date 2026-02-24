@@ -53,6 +53,61 @@ def test_merge_profiles_succeeds_with_skip_browser_state(tmp_path: Path) -> None
     assert summary.validation.is_valid is True
 
 
+def test_merge_profiles_excludes_vm_bundles_by_default(tmp_path: Path) -> None:
+    """Skips vm_bundles from output profile copy unless explicitly included."""
+
+    profile_a = _create_minimal_profile(tmp_path / "a")
+    profile_b = _create_minimal_profile(tmp_path / "b")
+    vm_file = profile_a / "vm_bundles/huge.bundle"
+    vm_file.parent.mkdir(parents=True, exist_ok=True)
+    vm_file.write_bytes(b"blob")
+
+    summary = merge_profiles(
+        profile_a=profile_a,
+        profile_b=profile_b,
+        output_profile=tmp_path / "out",
+        include_sensitive_claude_credentials=False,
+        base_source="a",
+        browser_state_a_path=None,
+        browser_state_b_path=None,
+        browser_state_output_path=None,
+        merge_indexeddb=False,
+        skip_browser_state=True,
+        force_output_overwrite=False,
+    )
+
+    assert summary.merged_session_count == 1
+    assert not (summary.output_profile / "vm_bundles").exists()
+
+
+def test_merge_profiles_can_include_vm_bundles(tmp_path: Path) -> None:
+    """Copies vm_bundles into output when include flag is set."""
+
+    profile_a = _create_minimal_profile(tmp_path / "a")
+    profile_b = _create_minimal_profile(tmp_path / "b")
+    vm_file = profile_a / "vm_bundles/huge.bundle"
+    vm_file.parent.mkdir(parents=True, exist_ok=True)
+    vm_file.write_bytes(b"blob")
+
+    summary = merge_profiles(
+        profile_a=profile_a,
+        profile_b=profile_b,
+        output_profile=tmp_path / "out",
+        include_sensitive_claude_credentials=False,
+        base_source="a",
+        browser_state_a_path=None,
+        browser_state_b_path=None,
+        browser_state_output_path=None,
+        merge_indexeddb=False,
+        skip_browser_state=True,
+        force_output_overwrite=False,
+        include_vm_bundles=True,
+    )
+
+    assert summary.merged_session_count == 1
+    assert (summary.output_profile / "vm_bundles/huge.bundle").exists()
+
+
 def _create_minimal_profile(profile: Path) -> Path:
     """Creates a profile with one minimal session."""
 

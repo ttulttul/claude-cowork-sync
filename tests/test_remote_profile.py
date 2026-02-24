@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_cowork_sync.remote_profile import fetch_remote_profile
+from claude_cowork_sync.remote_profile import _build_remote_tar_command, fetch_remote_profile
 
 
 class _FakePopen:
@@ -52,6 +52,21 @@ def test_fetch_remote_profile_extracts_tar_stream(monkeypatch: pytest.MonkeyPatc
 
     assert fetched == tmp_path / "remote-profile/Claude"
     assert (fetched / "local-agent-mode-sessions/u/o/local_1.json").exists()
+
+
+def test_build_remote_tar_command_excludes_vm_bundles_by_default() -> None:
+    """Adds vm_bundles exclude patterns to remote tar command by default."""
+
+    command = _build_remote_tar_command("Library/Application Support/Claude", include_vm_bundles=False)
+    assert '--exclude="$BASE_NAME/vm_bundles"' in command
+    assert '--exclude="$BASE_NAME/vm_bundles/*"' in command
+
+
+def test_build_remote_tar_command_can_include_vm_bundles() -> None:
+    """Omits vm_bundles exclude patterns when include flag is set."""
+
+    command = _build_remote_tar_command("Library/Application Support/Claude", include_vm_bundles=True)
+    assert "vm_bundles" not in command
 
 
 def test_fetch_remote_profile_rejects_unsafe_tar_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

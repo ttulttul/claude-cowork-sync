@@ -38,11 +38,12 @@ def merge_profiles(
     merge_indexeddb: bool,
     skip_browser_state: bool,
     force_output_overwrite: bool,
+    include_vm_bundles: bool = False,
 ) -> MergeSummary:
     """Merges two Claude profile directories into one output profile."""
 
     _validate_input_profiles(profile_a, profile_b)
-    _prepare_output_profile(profile_a, output_profile, force_output_overwrite)
+    _prepare_output_profile(profile_a, output_profile, force_output_overwrite, include_vm_bundles)
     merged_sessions = merge_session_trees(
         profile_a=profile_a,
         profile_b=profile_b,
@@ -90,7 +91,12 @@ def _validate_input_profiles(profile_a: Path, profile_b: Path) -> None:
             raise NotADirectoryError(message)
 
 
-def _prepare_output_profile(profile_a: Path, output_profile: Path, force_output_overwrite: bool) -> None:
+def _prepare_output_profile(
+    profile_a: Path,
+    output_profile: Path,
+    force_output_overwrite: bool,
+    include_vm_bundles: bool,
+) -> None:
     """Creates the output profile by cloning profile A."""
 
     if output_profile.exists():
@@ -101,7 +107,10 @@ def _prepare_output_profile(profile_a: Path, output_profile: Path, force_output_
         logger.warning("Removing existing output profile: %s", output_profile)
         shutil.rmtree(output_profile)
     logger.info("Copying base profile to output: %s", output_profile)
-    shutil.copytree(profile_a, output_profile)
+    ignore = None if include_vm_bundles else shutil.ignore_patterns("vm_bundles")
+    if not include_vm_bundles:
+        logger.info("Excluding vm_bundles from base profile copy")
+    shutil.copytree(profile_a, output_profile, ignore=ignore)
 
 
 def _merge_browser_state_files(
