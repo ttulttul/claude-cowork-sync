@@ -146,15 +146,13 @@ def _extract_member(archive: tarfile.TarFile, member: tarfile.TarInfo, destinati
         target_path.mkdir(parents=True, exist_ok=True)
         return
     if member.isfile():
-        fileobj = archive.extractfile(member)
-        if fileobj is None:
-            message = f"Archive member payload missing: {member.name}"
-            logger.error(message)
-            raise ValueError(message)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        with fileobj, target_path.open("wb") as handle:
-            shutil.copyfileobj(fileobj, handle)
-        _apply_member_times(target_path=target_path, member=member)
+        _extract_regular_file(archive=archive, member=member, target_path=target_path)
+        return
+    if member.issym():
+        _extract_symlink(member=member, destination=destination, target_path=target_path)
+        return
+    if member.islnk():
+        _extract_hardlink(member=member, destination=destination, target_path=target_path)
         return
     logger.warning("Skipping unsupported tar member type: %s", member.name)
 
@@ -172,6 +170,77 @@ def _safe_target_path(destination: Path, member_name: str) -> Path:
         logger.error(message)
         raise ValueError(message) from error
     return resolved_candidate
+
+
+def _extract_regular_file(archive: tarfile.TarFile, member: tarfile.TarInfo, target_path: Path) -> None:
+    """Extracts a regular file member payload into target path."""
+
+    fileobj = archive.extractfile(member)
+    if fileobj is None:
+        message = f"Archive member payload missing: {member.name}"
+        logger.error(message)
+        raise ValueError(message)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    _replace_existing_path(target_path)
+    with fileobj, target_path.open("wb") as handle:
+        shutil.copyfileobj(fileobj, handle)
+    _apply_member_times(target_path=target_path, member=member)
+
+
+def _extract_symlink(member: tarfile.TarInfo, destination: Path, target_path: Path) -> None:
+    """Extracts a symlink member after validating link target path."""
+
+    if not _is_safe_symlink_target(destination=destination, symlink_path=target_path, link_name=member.linkname):
+        logger.warning("Skipping unsafe symlink tar member: %s -> %s", member.name, member.linkname)
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    _replace_existing_path(target_path)
+    os.symlink(member.linkname, target_path)
+
+
+def _extract_hardlink(member: tarfile.TarInfo, destination: Path, target_path: Path) -> None:
+    """Extracts a hardlink member when source target is available and safe."""
+
+    try:
+        source_path = _safe_target_path(destination=destination, member_name=member.linkname)
+    except ValueError:
+        logger.warning("Skipping unsafe hardlink tar member: %s -> %s", member.name, member.linkname)
+        return
+    if not source_path.exists() or not source_path.is_file():
+        logger.warning("Skipping hardlink with missing source: %s -> %s", member.name, member.linkname)
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    _replace_existing_path(target_path)
+    os.link(source_path, target_path)
+    _apply_member_times(target_path=target_path, member=member)
+
+
+def _is_safe_symlink_target(destination: Path, symlink_path: Path, link_name: str) -> bool:
+    """Returns true when symlink target resolves within extraction destination."""
+
+    if not link_name:
+        return False
+    if Path(link_name).is_absolute():
+        return False
+    resolved_destination = destination.resolve()
+    resolved_link_target = (symlink_path.parent / link_name).resolve()
+    try:
+        resolved_link_target.relative_to(resolved_destination)
+    except ValueError:
+        return False
+    return True
+
+
+def _replace_existing_path(path: Path) -> None:
+    """Deletes existing non-directory path to allow replacement extraction."""
+
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_dir() and not path.is_symlink():
+        message = f"Cannot replace directory path during extraction: {path}"
+        logger.error(message)
+        raise ValueError(message)
+    path.unlink()
 
 
 def _apply_member_times(target_path: Path, member: tarfile.TarInfo) -> None:

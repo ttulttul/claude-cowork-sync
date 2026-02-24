@@ -7,3 +7,4 @@
 - For Claude profile storage, LevelDB files are not merge-safe at filesystem granularity; logical export/import is required for reliable cross-machine merges.
 - For remote profile ingestion, streaming `tar` over SSH avoids copying LevelDB internals piecemeal and handles profile paths with spaces more reliably than ad hoc `scp` path quoting.
 - Defaulting merge inputs to `~/Library/Application Support/Claude` on both local and remote systems substantially simplifies the common workflow to `merge --merge-from <host>`.
+- Claude profiles can include symlink/hardlink entries (for example `debug/latest`); preserving safe links during tar extraction avoids noisy warnings and keeps debug pointer paths intact.

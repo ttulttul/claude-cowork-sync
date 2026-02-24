@@ -68,6 +68,8 @@ This mode:
 3. Writes merged output to a unique path in the system temp directory like `.../claude-cowork-merged-<timestamp>`.
 4. Auto-exports browser state for both profiles and performs the same merge + validation flow.
 
+Note: SSH profile fetch now preserves safe symlink/hardlink tar entries (for example debug pointers like `.../debug/latest`).
+
 Options:
 
 - `--skip-browser-state`: merge filesystem sessions only.
