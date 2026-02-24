@@ -126,6 +126,63 @@ def test_fetch_remote_profile_extracts_safe_hardlink(monkeypatch: pytest.MonkeyP
     assert os.stat(original).st_ino == os.stat(linked).st_ino
 
 
+def test_fetch_remote_profile_logs_progress(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Emits periodic info progress logs during remote extraction."""
+
+    tar_payload = _tar_bytes_for_paths(
+        {
+            "Claude/local-agent-mode-sessions/u/o/local_1.json": b"{}",
+            "Claude/local-agent-mode-sessions/u/o/local_2.json": b"{}",
+        }
+    )
+    monkeypatch.setattr("claude_cowork_sync.remote_profile.shutil.which", lambda _: "/usr/bin/ssh")
+    monkeypatch.setattr(
+        "claude_cowork_sync.remote_profile.subprocess.Popen",
+        lambda *args, **kwargs: _FakePopen(tar_payload=tar_payload),
+    )
+    caplog.set_level("INFO")
+
+    fetch_remote_profile(
+        remote_host="user@example",
+        remote_profile_path="Library/Application Support/Claude",
+        temp_parent=tmp_path,
+    )
+
+    assert any("Remote fetch progress:" in message for message in caplog.messages)
+    assert any("Remote profile fetch complete:" in message for message in caplog.messages)
+
+
+def test_fetch_remote_profile_skips_unsafe_symlink_without_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Skips unsafe symlink entries without warning-level log noise."""
+
+    tar_payload = _tar_bytes_with_symlink(
+        file_path="Claude/local-agent-mode-sessions/u/o/debug/run-1.json",
+        file_content=b"{}",
+        link_path="Claude/local-agent-mode-sessions/u/o/debug/latest",
+        link_target="/etc/passwd",
+    )
+    monkeypatch.setattr("claude_cowork_sync.remote_profile.shutil.which", lambda _: "/usr/bin/ssh")
+    monkeypatch.setattr(
+        "claude_cowork_sync.remote_profile.subprocess.Popen",
+        lambda *args, **kwargs: _FakePopen(tar_payload=tar_payload),
+    )
+    caplog.set_level("WARNING")
+
+    fetched = fetch_remote_profile(
+        remote_host="user@example",
+        remote_profile_path="Library/Application Support/Claude",
+        temp_parent=tmp_path,
+    )
+
+    assert (fetched / "local-agent-mode-sessions/u/o/debug/run-1.json").exists()
+    assert not (fetched / "local-agent-mode-sessions/u/o/debug/latest").exists()
+    assert not any("symlink" in message.lower() and "skip" in message.lower() for message in caplog.messages)
+
+
 def _tar_bytes_for_paths(files: dict[str, bytes]) -> bytes:
     """Builds in-memory tar payload with provided file mapping."""
 

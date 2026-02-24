@@ -9,11 +9,29 @@ import shutil
 import subprocess
 import tarfile
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory, mkdtemp
-from typing import Iterator, Optional
+from time import monotonic
+from typing import BinaryIO, Iterator, Optional
 
 logger = logging.getLogger(__name__)
+
+_PROGRESS_MEMBER_INTERVAL = 500
+_PROGRESS_TIME_INTERVAL_SECONDS = 2.5
+
+
+@dataclass
+class _ExtractionStats:
+    """Tracks extraction progress metrics for remote profile fetches."""
+
+    members_seen: int = 0
+    directories: int = 0
+    regular_files: int = 0
+    symlinks: int = 0
+    hardlinks: int = 0
+    skipped_members: int = 0
+    extracted_bytes: int = 0
 
 
 def fetch_remote_profile(
@@ -37,7 +55,7 @@ def fetch_remote_profile(
         logger.error(message)
         raise RuntimeError(message)
     try:
-        _extract_tar_stream(process.stdout, target_root)
+        stats = _extract_tar_stream(process.stdout, target_root)
     except (tarfile.TarError, OSError, ValueError) as error:
         stderr_output = process.stderr.read().decode("utf-8", errors="replace")
         process.kill()
@@ -57,6 +75,15 @@ def fetch_remote_profile(
         message = f"Fetched profile not found after transfer: {fetched_path}"
         logger.error(message)
         raise FileNotFoundError(message)
+    logger.info(
+        "Remote profile fetch complete: members=%d files=%d dirs=%d symlinks=%d hardlinks=%d bytes=%s",
+        stats.members_seen,
+        stats.regular_files,
+        stats.directories,
+        stats.symlinks,
+        stats.hardlinks,
+        _format_bytes(stats.extracted_bytes),
+    )
     return fetched_path
 
 
@@ -129,32 +156,51 @@ def _remote_profile_name(remote_profile_path: str) -> str:
     return profile_name
 
 
-def _extract_tar_stream(stream: object, destination: Path) -> None:
+def _extract_tar_stream(stream: BinaryIO, destination: Path) -> _ExtractionStats:
     """Extracts a tar stream into destination while preventing path traversal."""
 
     destination.mkdir(parents=True, exist_ok=True)
+    stats = _ExtractionStats()
+    last_progress_log = monotonic()
     with tarfile.open(fileobj=stream, mode="r|*") as archive:
         for member in archive:
-            _extract_member(archive=archive, member=member, destination=destination)
+            _extract_member(archive=archive, member=member, destination=destination, stats=stats)
+            last_progress_log = _maybe_log_extraction_progress(stats=stats, last_log=last_progress_log)
+    return stats
 
 
-def _extract_member(archive: tarfile.TarFile, member: tarfile.TarInfo, destination: Path) -> None:
+def _extract_member(
+    archive: tarfile.TarFile,
+    member: tarfile.TarInfo,
+    destination: Path,
+    stats: _ExtractionStats,
+) -> None:
     """Extracts one tar member safely."""
 
+    stats.members_seen += 1
     target_path = _safe_target_path(destination=destination, member_name=member.name)
     if member.isdir():
         target_path.mkdir(parents=True, exist_ok=True)
+        stats.directories += 1
         return
     if member.isfile():
-        _extract_regular_file(archive=archive, member=member, target_path=target_path)
+        _extract_regular_file(archive=archive, member=member, target_path=target_path, stats=stats)
+        stats.regular_files += 1
         return
     if member.issym():
-        _extract_symlink(member=member, destination=destination, target_path=target_path)
+        if _extract_symlink(member=member, destination=destination, target_path=target_path):
+            stats.symlinks += 1
+        else:
+            stats.skipped_members += 1
         return
     if member.islnk():
-        _extract_hardlink(member=member, destination=destination, target_path=target_path)
+        if _extract_hardlink(member=member, destination=destination, target_path=target_path):
+            stats.hardlinks += 1
+        else:
+            stats.skipped_members += 1
         return
     logger.warning("Skipping unsupported tar member type: %s", member.name)
+    stats.skipped_members += 1
 
 
 def _safe_target_path(destination: Path, member_name: str) -> Path:
@@ -172,7 +218,12 @@ def _safe_target_path(destination: Path, member_name: str) -> Path:
     return resolved_candidate
 
 
-def _extract_regular_file(archive: tarfile.TarFile, member: tarfile.TarInfo, target_path: Path) -> None:
+def _extract_regular_file(
+    archive: tarfile.TarFile,
+    member: tarfile.TarInfo,
+    target_path: Path,
+    stats: _ExtractionStats,
+) -> None:
     """Extracts a regular file member payload into target path."""
 
     fileobj = archive.extractfile(member)
@@ -184,35 +235,38 @@ def _extract_regular_file(archive: tarfile.TarFile, member: tarfile.TarInfo, tar
     _replace_existing_path(target_path)
     with fileobj, target_path.open("wb") as handle:
         shutil.copyfileobj(fileobj, handle)
+    stats.extracted_bytes += max(0, member.size)
     _apply_member_times(target_path=target_path, member=member)
 
 
-def _extract_symlink(member: tarfile.TarInfo, destination: Path, target_path: Path) -> None:
+def _extract_symlink(member: tarfile.TarInfo, destination: Path, target_path: Path) -> bool:
     """Extracts a symlink member after validating link target path."""
 
     if not _is_safe_symlink_target(destination=destination, symlink_path=target_path, link_name=member.linkname):
-        logger.warning("Skipping unsafe symlink tar member: %s -> %s", member.name, member.linkname)
-        return
+        logger.debug("Skipping unsafe symlink tar member: %s -> %s", member.name, member.linkname)
+        return False
     target_path.parent.mkdir(parents=True, exist_ok=True)
     _replace_existing_path(target_path)
     os.symlink(member.linkname, target_path)
+    return True
 
 
-def _extract_hardlink(member: tarfile.TarInfo, destination: Path, target_path: Path) -> None:
+def _extract_hardlink(member: tarfile.TarInfo, destination: Path, target_path: Path) -> bool:
     """Extracts a hardlink member when source target is available and safe."""
 
     try:
         source_path = _safe_target_path(destination=destination, member_name=member.linkname)
     except ValueError:
-        logger.warning("Skipping unsafe hardlink tar member: %s -> %s", member.name, member.linkname)
-        return
+        logger.debug("Skipping unsafe hardlink tar member: %s -> %s", member.name, member.linkname)
+        return False
     if not source_path.exists() or not source_path.is_file():
-        logger.warning("Skipping hardlink with missing source: %s -> %s", member.name, member.linkname)
-        return
+        logger.debug("Skipping hardlink with missing source: %s -> %s", member.name, member.linkname)
+        return False
     target_path.parent.mkdir(parents=True, exist_ok=True)
     _replace_existing_path(target_path)
     os.link(source_path, target_path)
     _apply_member_times(target_path=target_path, member=member)
+    return True
 
 
 def _is_safe_symlink_target(destination: Path, symlink_path: Path, link_name: str) -> bool:
@@ -249,3 +303,36 @@ def _apply_member_times(target_path: Path, member: tarfile.TarInfo) -> None:
     if member.mtime <= 0:
         return
     os.utime(target_path, (member.mtime, member.mtime))
+
+
+def _maybe_log_extraction_progress(stats: _ExtractionStats, last_log: float) -> float:
+    """Logs periodic extraction progress and returns updated last-log timestamp."""
+
+    now = monotonic()
+    should_log = (
+        stats.members_seen == 1
+        or stats.members_seen % _PROGRESS_MEMBER_INTERVAL == 0
+        or now - last_log >= _PROGRESS_TIME_INTERVAL_SECONDS
+    )
+    if not should_log:
+        return last_log
+    logger.info(
+        "Remote fetch progress: members=%d files=%d links=%d bytes=%s",
+        stats.members_seen,
+        stats.regular_files,
+        stats.symlinks + stats.hardlinks,
+        _format_bytes(stats.extracted_bytes),
+    )
+    return now
+
+
+def _format_bytes(value: int) -> str:
+    """Formats byte counts for readable progress logs."""
+
+    if value < 1024:
+        return f"{value} B"
+    if value < 1024**2:
+        return f"{value / 1024:.1f} KiB"
+    if value < 1024**3:
+        return f"{value / (1024**2):.1f} MiB"
+    return f"{value / (1024**3):.1f} GiB"

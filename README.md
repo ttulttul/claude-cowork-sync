@@ -69,6 +69,7 @@ This mode:
 4. Auto-exports browser state for both profiles and performs the same merge + validation flow.
 
 Note: SSH profile fetch now preserves safe symlink/hardlink tar entries (for example debug pointers like `.../debug/latest`).
+The fetch step also reports periodic progress (`members`, `files`, `bytes`) during long remote syncs.
 
 Options:
 
