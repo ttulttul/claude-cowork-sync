@@ -223,9 +223,10 @@ def _requires_playwright_auto_export(args: argparse.Namespace) -> bool:
 
 
 def _ensure_playwright_available_for_auto_export() -> None:
-    """Raises a clear actionable error when Playwright runtime is unavailable."""
+    """Raises a clear actionable error when Playwright runtime/browsers are unavailable."""
 
     try:
+        from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
     except ImportError as error:
         message = (
@@ -239,6 +240,30 @@ def _ensure_playwright_available_for_auto_export() -> None:
         message = "Playwright import failed unexpectedly."
         logger.error(message)
         raise RuntimeError(message)
+    try:
+        with sync_playwright() as playwright:
+            executable_path = playwright.chromium.executable_path
+    except PlaywrightError as error:
+        message = (
+            "Playwright is installed but could not initialize Chromium runtime. "
+            "Run `uv run playwright install chromium`, or use `--skip-browser-state`."
+        )
+        logger.error(message)
+        raise RuntimeError(message) from error
+    _validate_playwright_executable_path(Path(executable_path))
+
+
+def _validate_playwright_executable_path(executable_path: Path) -> None:
+    """Validates Playwright Chromium executable path exists on disk."""
+
+    if executable_path.exists():
+        return
+    message = (
+        f"Playwright Chromium executable not found at `{executable_path}`. "
+        "Run `uv run playwright install chromium`, or use `--skip-browser-state`."
+    )
+    logger.error(message)
+    raise RuntimeError(message)
 
 
 def _resolve_profile_b(args: argparse.Namespace, stack: ExitStack) -> Path:

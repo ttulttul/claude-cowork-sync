@@ -201,6 +201,21 @@ def test_merge_from_fails_fast_without_playwright_before_remote_fetch(
     assert called["fetch_called"] is False
 
 
+def test_validate_playwright_executable_path_raises_for_missing_binary(tmp_path: Path) -> None:
+    """Raises actionable error when Chromium executable path is missing."""
+
+    with pytest.raises(RuntimeError):
+        cli._validate_playwright_executable_path(tmp_path / "missing" / "chrome")
+
+
+def test_validate_playwright_executable_path_accepts_existing_binary(tmp_path: Path) -> None:
+    """Passes when Chromium executable path exists."""
+
+    executable = tmp_path / "chrome"
+    executable.write_text("", encoding="utf-8")
+    cli._validate_playwright_executable_path(executable)
+
+
 def _create_profile(path: Path) -> Path:
     """Creates minimal directory to satisfy merge command path checks."""
 

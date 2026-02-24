@@ -11,3 +11,4 @@
 - Remote tar extraction benefits from periodic progress logs (member/file/byte counters) because SSH streaming can run for long periods with no visible output.
 - Excluding `vm_bundles` by default from remote fetch and base copy significantly reduces sync time and temporary disk usage for large (10GB+) VM assets unrelated to Cowork history merge correctness.
 - For `--merge-from` with auto browser-state export, preflight-check Playwright before remote transfer to avoid wasting time downloading large profile data when the browser runtime dependency is missing.
+- Playwright preflight should validate both Python package import and Chromium executable presence to catch the common “Executable doesn’t exist” failure mode early.
