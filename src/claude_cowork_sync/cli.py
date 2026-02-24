@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import ExitStack
+from datetime import datetime, timezone
 import json
 import logging
 import sys
@@ -17,6 +18,25 @@ from .merge_engine import merge_profiles
 from .remote_profile import fetch_remote_profile
 
 logger = logging.getLogger(__name__)
+
+
+def default_local_profile_path() -> Path:
+    """Returns the default local Claude profile path on macOS."""
+
+    return Path.home() / "Library" / "Application Support" / "Claude"
+
+
+def default_remote_profile_path() -> str:
+    """Returns default remote Claude profile path relative to remote home."""
+
+    return "Library/Application Support/Claude"
+
+
+def default_output_profile_path() -> Path:
+    """Returns a unique default output path under system temp directory."""
+
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return Path(tempfile.gettempdir()) / f"claude-cowork-merged-{timestamp}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,15 +56,25 @@ def _add_merge_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     """Adds `merge` subcommand arguments."""
 
     parser = subparsers.add_parser("merge", help="Merge two profile directories into one output profile.")
-    parser.add_argument("--profile-a", type=Path, required=True, help="Source profile A directory.")
+    parser.add_argument(
+        "--profile-a",
+        type=Path,
+        default=default_local_profile_path(),
+        help="Source profile A directory. Default: ~/Library/Application Support/Claude",
+    )
     parser.add_argument("--profile-b", type=Path, help="Source profile B directory.")
     parser.add_argument("--merge-from", help="SSH host to fetch remote profile as source B (user@host).")
     parser.add_argument(
         "--remote-profile-path",
-        default="Library/Application Support/Claude",
+        default=default_remote_profile_path(),
         help="Remote profile path (absolute, or relative to remote home directory).",
     )
-    parser.add_argument("--output-profile", type=Path, required=True, help="Destination merged profile directory.")
+    parser.add_argument(
+        "--output-profile",
+        type=Path,
+        default=None,
+        help="Destination merged profile directory. Default: unique temp dir under /tmp",
+    )
     parser.add_argument("--browser-state-a", type=Path, help="Browser state export JSON for profile A.")
     parser.add_argument("--browser-state-b", type=Path, help="Browser state export JSON for profile B.")
     parser.add_argument("--browser-state-output", type=Path, help="Merged browser state output JSON path.")
@@ -130,6 +160,7 @@ def _run_merge(args: argparse.Namespace) -> int:
     """Executes the `merge` subcommand."""
 
     with ExitStack() as stack:
+        output_profile = args.output_profile if args.output_profile is not None else default_output_profile_path()
         profile_b = _resolve_profile_b(args=args, stack=stack)
         browser_state_a, browser_state_b, browser_state_output = _resolve_browser_state_paths(
             args=args,
@@ -140,7 +171,7 @@ def _run_merge(args: argparse.Namespace) -> int:
         summary = merge_profiles(
             profile_a=args.profile_a,
             profile_b=profile_b,
-            output_profile=args.output_profile,
+            output_profile=output_profile,
             include_sensitive_claude_credentials=args.include_sensitive_claude_credentials,
             base_source=args.base_source,
             browser_state_a_path=browser_state_a,

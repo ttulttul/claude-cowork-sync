@@ -37,10 +37,8 @@ uv run pytest
 ## Workflow
 
 1. Close Claude on both machines.
-2. Copy each profile locally (`profile_a`, `profile_b`).
-3. Export browser state from both profiles.
-4. Run merge command.
-5. Validate output and atomically deploy.
+2. Run merge command (remote source can be fetched automatically over SSH).
+3. Validate output and atomically deploy.
 
 ## Commands
 
@@ -60,18 +58,15 @@ uv run cowork-merge merge \
 
 ```bash
 uv run cowork-merge merge \
-  --profile-a "/Users/ksimpson/Library/Application Support/Claude" \
-  --merge-from "user@remote-mac" \
-  --output-profile "/tmp/Claude-merged" \
-  --auto-export-browser-state \
-  --headless-browser-state
+  --merge-from "user@remote-mac"
 ```
 
 This mode:
 
-1. Fetches remote profile B from SSH host into a local temp directory.
-2. Optionally auto-exports browser state from both local/remote profile copies.
-3. Runs the same merge and validation flow.
+1. Uses local profile A default: `~/Library/Application Support/Claude`.
+2. Fetches remote profile B from SSH host at default path `~/Library/Application Support/Claude`.
+3. Writes merged output to a unique path in the system temp directory like `.../claude-cowork-merged-<timestamp>`.
+4. Auto-exports browser state for both profiles and performs the same merge + validation flow.
 
 Options:
 
@@ -83,6 +78,10 @@ Options:
 - `--merge-from user@host`: fetch profile B over SSH instead of `--profile-b`.
 - `--remote-profile-path`: remote path to profile directory.
   - Default is `Library/Application Support/Claude` relative to remote `$HOME`.
+- `--profile-a`: local profile A path.
+  - Default is `~/Library/Application Support/Claude`.
+- `--output-profile`: explicit merged profile output path.
+  - Default is a unique temp path under the system temp directory.
 - `--auto-export-browser-state`: export browser state JSONs automatically when not provided.
 - `--headless-browser-state`: use headless Playwright for auto-export.
 

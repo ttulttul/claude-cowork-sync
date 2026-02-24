@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,55 @@ import pytest
 from claude_cowork_sync import cli
 from claude_cowork_sync.merge_engine import MergeSummary
 from claude_cowork_sync.models import ValidationResult
+
+
+def test_merge_from_with_only_host_uses_default_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Allows merge command with only --merge-from by applying defaults."""
+
+    profile_a = _create_profile(tmp_path / "profile_a_default")
+    fetched_profile = _create_profile(tmp_path / "fetched_profile_default")
+    captured: dict[str, object] = {}
+
+    def _fake_fetch_remote_profile(remote_host: str, remote_profile_path: str, temp_parent: Path) -> Path:
+        captured["remote_host"] = remote_host
+        captured["remote_profile_path"] = remote_profile_path
+        captured["temp_parent"] = temp_parent
+        return fetched_profile
+
+    def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
+        captured["profile_a"] = kwargs["profile_a"]
+        captured["profile_b"] = kwargs["profile_b"]
+        captured["output_profile"] = kwargs["output_profile"]
+        return MergeSummary(
+            output_profile=kwargs["output_profile"],
+            merged_session_count=1,
+            browser_state_output=None,
+            validation=ValidationResult([], [], []),
+        )
+
+    monkeypatch.setattr("claude_cowork_sync.cli.default_local_profile_path", lambda: profile_a)
+    monkeypatch.setattr("claude_cowork_sync.cli.fetch_remote_profile", _fake_fetch_remote_profile)
+    monkeypatch.setattr("claude_cowork_sync.cli.merge_profiles", _fake_merge_profiles)
+
+    exit_code = cli.run(
+        [
+            "merge",
+            "--merge-from",
+            "user@remote",
+            "--skip-browser-state",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["profile_a"] == profile_a
+    assert captured["profile_b"] == fetched_profile
+    assert isinstance(captured["output_profile"], Path)
+    assert Path(captured["output_profile"]).parent == Path(tempfile.gettempdir())
+    assert Path(captured["output_profile"]).name.startswith("claude-cowork-merged-")
+    assert captured["remote_profile_path"] == "Library/Application Support/Claude"
 
 
 def test_merge_from_uses_fetched_remote_profile(
