@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 import logging
 import sys
+import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence, Tuple
 
 from .browser_storage import export_browser_state_with_playwright, import_browser_state_with_playwright, read_browser_state
 from .deploy import atomic_swap_profile
 from .merge_engine import merge_profiles
+from .remote_profile import fetch_remote_profile
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +37,27 @@ def _add_merge_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
 
     parser = subparsers.add_parser("merge", help="Merge two profile directories into one output profile.")
     parser.add_argument("--profile-a", type=Path, required=True, help="Source profile A directory.")
-    parser.add_argument("--profile-b", type=Path, required=True, help="Source profile B directory.")
+    parser.add_argument("--profile-b", type=Path, help="Source profile B directory.")
+    parser.add_argument("--merge-from", help="SSH host to fetch remote profile as source B (user@host).")
+    parser.add_argument(
+        "--remote-profile-path",
+        default="Library/Application Support/Claude",
+        help="Remote profile path (absolute, or relative to remote home directory).",
+    )
     parser.add_argument("--output-profile", type=Path, required=True, help="Destination merged profile directory.")
     parser.add_argument("--browser-state-a", type=Path, help="Browser state export JSON for profile A.")
     parser.add_argument("--browser-state-b", type=Path, help="Browser state export JSON for profile B.")
     parser.add_argument("--browser-state-output", type=Path, help="Merged browser state output JSON path.")
+    parser.add_argument(
+        "--auto-export-browser-state",
+        action="store_true",
+        help="Auto-export browser state for both profiles when browser state files are not provided.",
+    )
+    parser.add_argument(
+        "--headless-browser-state",
+        action="store_true",
+        help="Use headless browser mode for auto-exporting browser state.",
+    )
     parser.add_argument("--base-source", choices=["a", "b"], default="a", help="Base source for unknown keys.")
     parser.add_argument("--skip-browser-state", action="store_true", help="Skip LocalStorage/IndexedDB merge.")
     parser.add_argument("--skip-indexeddb", action="store_true", help="Do not merge IndexedDB stores.")
@@ -110,19 +129,27 @@ def run(argv: Sequence[str]) -> int:
 def _run_merge(args: argparse.Namespace) -> int:
     """Executes the `merge` subcommand."""
 
-    summary = merge_profiles(
-        profile_a=args.profile_a,
-        profile_b=args.profile_b,
-        output_profile=args.output_profile,
-        include_sensitive_claude_credentials=args.include_sensitive_claude_credentials,
-        base_source=args.base_source,
-        browser_state_a_path=args.browser_state_a,
-        browser_state_b_path=args.browser_state_b,
-        browser_state_output_path=args.browser_state_output,
-        merge_indexeddb=not args.skip_indexeddb,
-        skip_browser_state=args.skip_browser_state,
-        force_output_overwrite=args.force,
-    )
+    with ExitStack() as stack:
+        profile_b = _resolve_profile_b(args=args, stack=stack)
+        browser_state_a, browser_state_b, browser_state_output = _resolve_browser_state_paths(
+            args=args,
+            profile_a=args.profile_a,
+            profile_b=profile_b,
+            stack=stack,
+        )
+        summary = merge_profiles(
+            profile_a=args.profile_a,
+            profile_b=profile_b,
+            output_profile=args.output_profile,
+            include_sensitive_claude_credentials=args.include_sensitive_claude_credentials,
+            base_source=args.base_source,
+            browser_state_a_path=browser_state_a,
+            browser_state_b_path=browser_state_b,
+            browser_state_output_path=browser_state_output,
+            merge_indexeddb=not args.skip_indexeddb,
+            skip_browser_state=args.skip_browser_state,
+            force_output_overwrite=args.force,
+        )
     result = {
         "outputProfile": str(summary.output_profile),
         "mergedSessionCount": summary.merged_session_count,
@@ -136,6 +163,70 @@ def _run_merge(args: argparse.Namespace) -> int:
     }
     print(json.dumps(result, indent=2))
     return 0
+
+
+def _resolve_profile_b(args: argparse.Namespace, stack: ExitStack) -> Path:
+    """Resolves profile B from either local path or remote SSH source."""
+
+    if args.profile_b and args.merge_from:
+        message = "Use either --profile-b or --merge-from, not both."
+        logger.error(message)
+        raise ValueError(message)
+    if args.merge_from:
+        temp_parent = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="cowork-merge-remote-")))
+        fetched = fetch_remote_profile(
+            remote_host=args.merge_from,
+            remote_profile_path=args.remote_profile_path,
+            temp_parent=temp_parent,
+        )
+        logger.info("Fetched remote profile to local temp path: %s", fetched)
+        return fetched
+    if args.profile_b is None:
+        message = "Merge requires --profile-b or --merge-from."
+        logger.error(message)
+        raise ValueError(message)
+    return args.profile_b
+
+
+def _resolve_browser_state_paths(
+    args: argparse.Namespace,
+    profile_a: Path,
+    profile_b: Path,
+    stack: ExitStack,
+) -> Tuple[Optional[Path], Optional[Path], Optional[Path]]:
+    """Resolves browser state input/output paths for merge command."""
+
+    if args.skip_browser_state:
+        return None, None, None
+    provided = [args.browser_state_a, args.browser_state_b, args.browser_state_output]
+    if all(item is not None for item in provided):
+        return args.browser_state_a, args.browser_state_b, args.browser_state_output
+    if any(item is not None for item in provided):
+        message = "Provide all browser state paths or none: --browser-state-a, --browser-state-b, --browser-state-output."
+        logger.error(message)
+        raise ValueError(message)
+    should_auto_export = args.auto_export_browser_state or bool(args.merge_from)
+    if not should_auto_export:
+        return None, None, None
+    temp_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="cowork-merge-browser-state-")))
+    browser_state_a = temp_dir / "browser_state_a.json"
+    browser_state_b = temp_dir / "browser_state_b.json"
+    browser_state_output = temp_dir / "browser_state_merged.json"
+    logger.info("Auto-exporting browser state for profile A: %s", profile_a)
+    export_browser_state_with_playwright(
+        profile_dir=profile_a,
+        output_path=browser_state_a,
+        origin="https://claude.ai",
+        headless=args.headless_browser_state,
+    )
+    logger.info("Auto-exporting browser state for profile B: %s", profile_b)
+    export_browser_state_with_playwright(
+        profile_dir=profile_b,
+        output_path=browser_state_b,
+        origin="https://claude.ai",
+        headless=args.headless_browser_state,
+    )
+    return browser_state_a, browser_state_b, browser_state_output
 
 
 def _run_export_browser_state(args: argparse.Namespace) -> int:

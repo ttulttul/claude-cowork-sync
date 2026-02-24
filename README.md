@@ -56,6 +56,23 @@ uv run cowork-merge merge \
   --browser-state-output "/path/to/merged_state.json"
 ```
 
+### Merge from remote host (common path)
+
+```bash
+uv run cowork-merge merge \
+  --profile-a "/Users/ksimpson/Library/Application Support/Claude" \
+  --merge-from "user@remote-mac" \
+  --output-profile "/tmp/Claude-merged" \
+  --auto-export-browser-state \
+  --headless-browser-state
+```
+
+This mode:
+
+1. Fetches remote profile B from SSH host into a local temp directory.
+2. Optionally auto-exports browser state from both local/remote profile copies.
+3. Runs the same merge and validation flow.
+
 Options:
 
 - `--skip-browser-state`: merge filesystem sessions only.
@@ -63,6 +80,11 @@ Options:
 - `--base-source {a|b}`: base profile for unknown localStorage keys.
 - `--force`: overwrite existing output profile directory.
 - `--include-sensitive-claude-credentials`: allow copying `.claude/.credentials.json` from secondary side.
+- `--merge-from user@host`: fetch profile B over SSH instead of `--profile-b`.
+- `--remote-profile-path`: remote path to profile directory.
+  - Default is `Library/Application Support/Claude` relative to remote `$HOME`.
+- `--auto-export-browser-state`: export browser state JSONs automatically when not provided.
+- `--headless-browser-state`: use headless Playwright for auto-export.
 
 ### Export browser state (Playwright)
 
