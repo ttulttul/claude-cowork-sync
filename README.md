@@ -71,6 +71,7 @@ This mode:
 
 Note: SSH profile fetch now preserves safe symlink/hardlink tar entries (for example debug pointers like `.../debug/latest`).
 The fetch step also reports periodic progress (`members`, `files`, `bytes`) during long remote syncs.
+Auto-export requires Playwright; if unavailable, merge now fails fast before remote transfer starts.
 
 Options:
 
@@ -90,6 +91,15 @@ Options:
   - Default behavior excludes `vm_bundles`.
 - `--auto-export-browser-state`: export browser state JSONs automatically when not provided.
 - `--headless-browser-state`: use headless Playwright for auto-export.
+
+If Playwright is missing and you want browser-state merge:
+
+```bash
+uv add --dev playwright
+uv run playwright install chromium
+```
+
+If you intentionally want filesystem-only merge, use `--skip-browser-state`.
 
 ### Export browser state (Playwright)
 

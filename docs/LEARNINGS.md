@@ -10,3 +10,4 @@
 - Claude profiles can include symlink/hardlink entries (for example `debug/latest`); preserving safe links during tar extraction avoids noisy warnings and keeps debug pointer paths intact.
 - Remote tar extraction benefits from periodic progress logs (member/file/byte counters) because SSH streaming can run for long periods with no visible output.
 - Excluding `vm_bundles` by default from remote fetch and base copy significantly reduces sync time and temporary disk usage for large (10GB+) VM assets unrelated to Cowork history merge correctness.
+- For `--merge-from` with auto browser-state export, preflight-check Playwright before remote transfer to avoid wasting time downloading large profile data when the browser runtime dependency is missing.

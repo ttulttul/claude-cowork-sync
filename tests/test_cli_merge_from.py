@@ -168,6 +168,39 @@ def test_merge_from_can_include_vm_bundles(monkeypatch: pytest.MonkeyPatch, tmp_
     assert captured["include_vm_bundles_merge"] is True
 
 
+def test_merge_from_fails_fast_without_playwright_before_remote_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Raises before remote fetch when auto-export is needed and Playwright is unavailable."""
+
+    profile_a = _create_profile(tmp_path / "profile_a")
+    called: dict[str, bool] = {"fetch_called": False}
+
+    def _fake_fetch_remote_profile(*args: object, **kwargs: object) -> Path:
+        called["fetch_called"] = True
+        return tmp_path / "unexpected"
+
+    def _fake_playwright_check() -> None:
+        raise RuntimeError("Playwright missing for test")
+
+    monkeypatch.setattr("claude_cowork_sync.cli.fetch_remote_profile", _fake_fetch_remote_profile)
+    monkeypatch.setattr("claude_cowork_sync.cli._ensure_playwright_available_for_auto_export", _fake_playwright_check)
+
+    with pytest.raises(RuntimeError):
+        cli.run(
+            [
+                "merge",
+                "--profile-a",
+                str(profile_a),
+                "--merge-from",
+                "user@remote",
+            ]
+        )
+
+    assert called["fetch_called"] is False
+
+
 def _create_profile(path: Path) -> Path:
     """Creates minimal directory to satisfy merge command path checks."""
 

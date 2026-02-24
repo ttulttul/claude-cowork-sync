@@ -332,7 +332,10 @@ def _resolve_sync_playwright() -> Any:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as error:
-        message = "Playwright is required for browser export/import commands"
+        message = (
+            "Playwright is required for browser export/import commands. "
+            "Install with `uv add --dev playwright && uv run playwright install chromium`."
+        )
         logger.error(message)
         raise RuntimeError(message) from error
     return sync_playwright

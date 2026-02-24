@@ -165,6 +165,7 @@ def _run_merge(args: argparse.Namespace) -> int:
     """Executes the `merge` subcommand."""
 
     with ExitStack() as stack:
+        _preflight_browser_state_requirements(args)
         output_profile = args.output_profile if args.output_profile is not None else default_output_profile_path()
         profile_b = _resolve_profile_b(args=args, stack=stack)
         browser_state_a, browser_state_b, browser_state_output = _resolve_browser_state_paths(
@@ -200,6 +201,44 @@ def _run_merge(args: argparse.Namespace) -> int:
     }
     print(json.dumps(result, indent=2))
     return 0
+
+
+def _preflight_browser_state_requirements(args: argparse.Namespace) -> None:
+    """Validates browser-state prerequisites before expensive merge steps."""
+
+    if not _requires_playwright_auto_export(args):
+        return
+    _ensure_playwright_available_for_auto_export()
+
+
+def _requires_playwright_auto_export(args: argparse.Namespace) -> bool:
+    """Returns true when merge flow needs Playwright browser-state auto-export."""
+
+    if args.skip_browser_state:
+        return False
+    provided = [args.browser_state_a, args.browser_state_b, args.browser_state_output]
+    if any(item is not None for item in provided):
+        return False
+    return args.auto_export_browser_state or bool(args.merge_from)
+
+
+def _ensure_playwright_available_for_auto_export() -> None:
+    """Raises a clear actionable error when Playwright runtime is unavailable."""
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as error:
+        message = (
+            "Playwright is required for automatic browser-state export. "
+            "Install it with `uv add --dev playwright && uv run playwright install chromium`, "
+            "or run merge with `--skip-browser-state`."
+        )
+        logger.error(message)
+        raise RuntimeError(message) from error
+    if sync_playwright is None:
+        message = "Playwright import failed unexpectedly."
+        logger.error(message)
+        raise RuntimeError(message)
 
 
 def _resolve_profile_b(args: argparse.Namespace, stack: ExitStack) -> Path:
