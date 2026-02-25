@@ -365,6 +365,24 @@ def test_validate_playwright_executable_path_accepts_existing_binary(tmp_path: P
     cli._validate_playwright_executable_path(executable)
 
 
+def test_merge_headless_browser_state_defaults_to_true() -> None:
+    """Defaults merge browser-state operations to headless mode."""
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["merge", "--profile-b", "/tmp/profile-b"])
+
+    assert args.headless_browser_state is True
+
+
+def test_merge_headless_browser_state_can_be_disabled() -> None:
+    """Allows disabling headless mode with explicit --no-headless-browser-state flag."""
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["merge", "--profile-b", "/tmp/profile-b", "--no-headless-browser-state"])
+
+    assert args.headless_browser_state is False
+
+
 def test_merge_apply_imports_browser_state_and_deploys(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -438,7 +456,7 @@ def test_merge_apply_imports_browser_state_and_deploys(
     assert captured["checked_processes"] is True
     assert captured["browser_state_path"] == browser_state_output
     assert captured["import_profile_dir"] == output_profile
-    assert captured["import_headless"] is False
+    assert captured["import_headless"] is True
     assert captured["replace_local_storage"] is True
     assert captured["import_origin"] == "https://claude.ai"
     assert captured["live_profile"] == profile_a

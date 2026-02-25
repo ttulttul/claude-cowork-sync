@@ -182,7 +182,8 @@ Options:
 - `--parallel-local <N>`: set max local parallelism budget for merge operations.
   - Currently reserved for upcoming local parallel stages.
 - `--auto-export-browser-state`: export browser state JSONs automatically when not provided.
-- `--headless-browser-state`: use headless Playwright for auto-export.
+- `--headless-browser-state` / `--no-headless-browser-state`: control headless Playwright mode for auto-export/import.
+  - Default is headless mode enabled.
 
 If Playwright is missing and you want browser-state merge:
 

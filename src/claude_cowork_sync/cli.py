@@ -107,8 +107,9 @@ def _add_merge_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     parser.add_argument(
         "--headless-browser-state",
-        action="store_true",
-        help="Use headless browser mode for auto-exporting browser state.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run browser-state export/import in headless mode (default: enabled).",
     )
     parser.add_argument("--base-source", choices=["a", "b"], default="a", help="Base source for unknown keys.")
     parser.add_argument("--skip-browser-state", action="store_true", help="Skip LocalStorage/IndexedDB merge.")
