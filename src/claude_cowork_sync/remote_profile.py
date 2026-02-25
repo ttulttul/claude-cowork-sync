@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -19,6 +20,7 @@ from .progress import TerminalProgress, progress_rendering_enabled
 from .utils import sha256_file
 
 logger = logging.getLogger(__name__)
+_CLAUDE_HELPER_PROCESS_PATTERN = re.compile(r"Contents/Helpers/.+")
 
 _PROGRESS_MEMBER_INTERVAL = 500
 _PROGRESS_TIME_INTERVAL_SECONDS = 2.5
@@ -84,6 +86,7 @@ def fetch_remote_profile(
         logger.error(message)
         raise ValueError(message)
     _ensure_ssh_available()
+    _ensure_remote_claude_not_running(remote_host=remote_host)
     target_root = _create_target_root(temp_parent=temp_parent)
     logger.info("Fetching remote profile from %s:%s", remote_host, remote_profile_path)
     if not include_cache_dirs:
@@ -238,6 +241,62 @@ def _ensure_ssh_available() -> None:
         message = "ssh command is required for --merge-from but was not found."
         logger.error(message)
         raise RuntimeError(message)
+
+
+def _ensure_remote_claude_not_running(remote_host: str) -> None:
+    """Raises when case-sensitive `Claude` process is running on remote host."""
+
+    running = _find_remote_processes_with_signature(remote_host=remote_host, signature="Claude")
+    if not running:
+        return
+    message = (
+        f"Found running Claude process(es) on remote host {remote_host}. "
+        "Quit Claude on the remote machine and retry. "
+        f"Matches: {', '.join(running)}"
+    )
+    logger.error(message)
+    raise RuntimeError(message)
+
+
+def _find_remote_processes_with_signature(remote_host: str, signature: str) -> list[str]:
+    """Returns remote process descriptors containing a case-sensitive signature."""
+
+    completed = subprocess.run(
+        ["ssh", remote_host, "ps -axo pid=,comm=,args="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        message = f"Failed to list remote processes on {remote_host}: {completed.stderr.strip()}"
+        logger.error(message)
+        raise RuntimeError(message)
+    matches: list[str] = []
+    for raw_line in completed.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 2:
+            continue
+        pid_str = parts[0]
+        try:
+            int(pid_str)
+        except ValueError:
+            continue
+        comm = parts[1]
+        args = parts[2] if len(parts) > 2 else ""
+        if signature == "Claude" and _is_ignored_claude_helper_process(comm=comm, args=args):
+            continue
+        if signature in comm or signature in args:
+            matches.append(f"{pid_str}:{comm}")
+    return matches
+
+
+def _is_ignored_claude_helper_process(comm: str, args: str) -> bool:
+    """Returns true for remote helper-host processes that should not block fetch."""
+
+    return bool(_CLAUDE_HELPER_PROCESS_PATTERN.search(comm) or _CLAUDE_HELPER_PROCESS_PATTERN.search(args))
 
 
 def _create_target_root(temp_parent: Optional[Path]) -> Path:

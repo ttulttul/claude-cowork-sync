@@ -67,6 +67,16 @@ class _FakeCompletedProcess:
         self.stderr = stderr
 
 
+@pytest.fixture(autouse=True)
+def _default_remote_process_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provides default remote `ps` response so tests avoid real SSH process checks."""
+
+    monkeypatch.setattr(
+        "claude_cowork_sync.remote_profile.subprocess.run",
+        lambda *args, **kwargs: _FakeCompletedProcess(returncode=0, stdout=""),
+    )
+
+
 def test_fetch_remote_profile_extracts_tar_stream(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Fetches remote profile and extracts expected root folder."""
 
@@ -411,6 +421,76 @@ def test_fetch_remote_profile_skips_unsafe_symlink_without_warning(
     assert (fetched / "local-agent-mode-sessions/u/o/debug/run-1.json").exists()
     assert not (fetched / "local-agent-mode-sessions/u/o/debug/latest").exists()
     assert not any("symlink" in message.lower() and "skip" in message.lower() for message in caplog.messages)
+
+
+def test_fetch_remote_profile_blocks_when_remote_claude_running(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Aborts fetch when remote machine reports running `Claude` process."""
+
+    monkeypatch.setattr("claude_cowork_sync.remote_profile.shutil.which", lambda _: "/usr/bin/ssh")
+
+    called: dict[str, bool] = {"popen_called": False}
+
+    def _fake_popen(*args: Any, **kwargs: Any) -> _FakePopen:
+        called["popen_called"] = True
+        return _FakePopen(tar_payload=b"")
+
+    def _fake_run(*args: Any, **kwargs: Any) -> _FakeCompletedProcess:
+        return _FakeCompletedProcess(
+            returncode=0,
+            stdout="123 /Applications/Claude.app/Contents/MacOS/Claude /Applications/Claude.app/Contents/MacOS/Claude\n",
+        )
+
+    monkeypatch.setattr("claude_cowork_sync.remote_profile.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("claude_cowork_sync.remote_profile.subprocess.run", _fake_run)
+
+    with pytest.raises(RuntimeError):
+        fetch_remote_profile(
+            remote_host="user@example",
+            remote_profile_path="Library/Application Support/Claude",
+            temp_parent=tmp_path,
+        )
+
+    assert called["popen_called"] is False
+
+
+def test_fetch_remote_profile_allows_remote_helper_host_process(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Ignores remote helper-host process entries while checking for running Claude."""
+
+    tar_payload = _tar_bytes_for_paths({"Claude/local-agent-mode-sessions/u/o/local_1.json": b"{}"})
+    monkeypatch.setattr("claude_cowork_sync.remote_profile.shutil.which", lambda _: "/usr/bin/ssh")
+    monkeypatch.setattr(
+        "claude_cowork_sync.remote_profile.subprocess.Popen",
+        lambda *args, **kwargs: _FakePopen(tar_payload=tar_payload),
+    )
+
+    def _fake_run(args: list[str], **kwargs: Any) -> _FakeCompletedProcess:
+        command = args[2] if len(args) > 2 else ""
+        if command == "ps -axo pid=,comm=,args=":
+            return _FakeCompletedProcess(
+                returncode=0,
+                stdout=(
+                    "200 /Applications/Claude.app/Contents/Helpers/chrome-native-host "
+                    "/Applications/Claude.app/Contents/Helpers/chrome-native-host "
+                    "chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/\n"
+                ),
+            )
+        return _FakeCompletedProcess(returncode=0, stdout="")
+
+    monkeypatch.setattr("claude_cowork_sync.remote_profile.subprocess.run", _fake_run)
+
+    fetched = fetch_remote_profile(
+        remote_host="user@example",
+        remote_profile_path="Library/Application Support/Claude",
+        temp_parent=tmp_path,
+    )
+
+    assert fetched == tmp_path / "remote-profile/Claude"
 
 
 def _tar_bytes_for_paths(files: dict[str, bytes]) -> bytes:

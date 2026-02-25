@@ -151,6 +151,7 @@ This mode:
 5. Excludes remote `vm_bundles` and non-essential cache directories by default to reduce transfer size.
 6. Preserves local `vm_bundles` in the merged output so local VM runtime assets remain usable.
 7. Auto-exports browser state for both profiles and performs the same merge + validation flow.
+8. Verifies `Claude` is not running on the remote host before any profile transfer starts.
 
 To merge and immediately apply to your local live profile:
 
@@ -183,6 +184,9 @@ Options:
 - `--apply`: import merged browser state into merged output and atomically deploy it into `--profile-a`.
   - Safety check: this aborts if any running process contains case-sensitive `Claude`; quit Claude first.
   - The check ignores Claude helper-host processes under `Contents/Helpers/...` (for example browser extension native-host helpers).
+- `--merge-from` safety preflight:
+  - Before remote copy begins, the tool checks remote processes and aborts if case-sensitive `Claude` is running on the remote machine.
+  - Remote helper-host processes under `Contents/Helpers/...` are ignored.
 - `--include-sensitive-claude-credentials`: allow copying `.claude/.credentials.json` from secondary side.
 - `--merge-from user@host`: fetch profile B over SSH instead of `--profile-b`.
 - `--remote-profile-path`: remote path to profile directory.
