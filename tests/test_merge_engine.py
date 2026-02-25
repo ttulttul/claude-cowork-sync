@@ -191,6 +191,28 @@ def test_merge_profiles_can_include_cache_dirs(tmp_path: Path) -> None:
     assert (summary.output_profile / "Code Cache/js/index.bin").exists()
 
 
+def test_merge_profiles_rejects_invalid_parallel_local(tmp_path: Path) -> None:
+    """Raises when parallel_local is below one."""
+
+    profile_a = _create_minimal_profile(tmp_path / "a")
+    profile_b = _create_minimal_profile(tmp_path / "b")
+    with pytest.raises(ValueError):
+        merge_profiles(
+            profile_a=profile_a,
+            profile_b=profile_b,
+            output_profile=tmp_path / "out",
+            include_sensitive_claude_credentials=False,
+            base_source="a",
+            browser_state_a_path=None,
+            browser_state_b_path=None,
+            browser_state_output_path=None,
+            merge_indexeddb=False,
+            skip_browser_state=True,
+            force_output_overwrite=False,
+            parallel_local=0,
+        )
+
+
 def _create_minimal_profile(profile: Path) -> Path:
     """Creates a profile with one minimal session."""
 

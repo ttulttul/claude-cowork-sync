@@ -13,6 +13,8 @@ from typing import Any
 import pytest
 
 from claude_cowork_sync.remote_profile import (
+    _build_remote_session_hash_command,
+    _build_remote_session_hash_command_with_parallel,
     _build_remote_tar_command,
     _paths_to_transfer_for_remote_sessions,
     _should_transfer_remote_session_json,
@@ -230,6 +232,26 @@ def test_build_remote_tar_command_can_include_caches() -> None:
     )
     assert "--exclude=\"$BASE_NAME/Cache\"" not in command
     assert "--exclude=\"$BASE_NAME/Code Cache\"" not in command
+
+
+def test_build_remote_session_hash_command_defaults_to_remote_cores() -> None:
+    """Uses remote CPU detection and xargs parallel hashing by default."""
+
+    command = _build_remote_session_hash_command("Library/Application Support/Claude")
+    assert "command -v nproc" in command
+    assert "sysctl -n hw.ncpu" in command
+    assert "xargs -0 -n 1 -P \"$PARALLELISM\"" in command
+
+
+def test_build_remote_session_hash_command_with_parallel_uses_explicit_limit() -> None:
+    """Uses explicit xargs parallelism when requested by CLI."""
+
+    command = _build_remote_session_hash_command_with_parallel(
+        "Library/Application Support/Claude",
+        parallel_remote=7,
+    )
+    assert "PARALLELISM=7" in command
+    assert "xargs -0 -n 1 -P \"$PARALLELISM\"" in command
 
 
 def test_fetch_remote_profile_rejects_unsafe_tar_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

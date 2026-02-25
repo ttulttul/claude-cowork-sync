@@ -63,6 +63,7 @@ def fetch_remote_profile(
     include_vm_bundles: bool = False,
     baseline_profile: Optional[Path] = None,
     include_cache_dirs: bool = False,
+    parallel_remote: Optional[int] = None,
 ) -> Path:
     """Fetches a remote Claude profile over SSH into a local temporary directory."""
 
@@ -83,6 +84,7 @@ def fetch_remote_profile(
             target_root=target_root,
             baseline_profile=baseline_profile,
             include_cache_dirs=include_cache_dirs,
+            parallel_remote=parallel_remote,
         )
     else:
         stats = _fetch_remote_tar_with_command(
@@ -120,6 +122,7 @@ def _fetch_remote_profile_incremental(
     target_root: Path,
     baseline_profile: Path,
     include_cache_dirs: bool,
+    parallel_remote: Optional[int],
 ) -> _ExtractionStats:
     """Fetches remote profile while transferring only changed/new session trees."""
 
@@ -134,7 +137,11 @@ def _fetch_remote_profile_incremental(
         ),
         target_root=target_root,
     )
-    remote_hashes = _list_remote_session_json_hashes(remote_host=remote_host, remote_profile_path=remote_profile_path)
+    remote_hashes = _list_remote_session_json_hashes(
+        remote_host=remote_host,
+        remote_profile_path=remote_profile_path,
+        parallel_remote=parallel_remote,
+    )
     transfer_paths = _paths_to_transfer_for_remote_sessions(remote_hashes=remote_hashes, baseline_profile=baseline_profile)
     logger.info(
         "Incremental session diff: remote_sessions=%d transfer_paths=%d",
@@ -259,10 +266,46 @@ def _build_remote_session_hash_command(remote_profile_path: str) -> str:
         'if [ ! -d "local-agent-mode-sessions" ]; then '
         "exit 0; "
         "fi; "
-        "find local-agent-mode-sessions -type f -name 'local_*.json' -print | "
-        'while IFS= read -r file; do hash="$(shasum -a 256 "$file" | awk \'{print $1}\')"; '
-        'printf "%s\\t%s\\n" "$file" "$hash"; '
-        "done"
+        'if command -v nproc >/dev/null 2>&1; then '
+        'PARALLELISM="$(nproc)"; '
+        'elif command -v sysctl >/dev/null 2>&1; then '
+        'PARALLELISM="$(sysctl -n hw.ncpu 2>/dev/null || echo 1)"; '
+        "else "
+        'PARALLELISM="1"; '
+        "fi; "
+        'if [ "$PARALLELISM" -lt 1 ] 2>/dev/null; then PARALLELISM=1; fi; '
+        + _build_remote_hash_xargs_pipeline(parallelism_expr='"$PARALLELISM"')
+    )
+
+
+def _build_remote_session_hash_command_with_parallel(remote_profile_path: str, parallel_remote: int) -> str:
+    """Builds remote command to list session JSON hashes with explicit remote parallelism."""
+
+    profile_expr = _remote_path_expression(remote_profile_path)
+    return (
+        f"PROFILE_PATH={profile_expr}; "
+        'if [ ! -d "$PROFILE_PATH" ]; then '
+        'echo "Remote profile directory does not exist: $PROFILE_PATH" 1>&2; '
+        "exit 3; "
+        "fi; "
+        f"PARALLELISM={parallel_remote}; "
+        'if [ "$PARALLELISM" -lt 1 ] 2>/dev/null; then PARALLELISM=1; fi; '
+        'cd "$PROFILE_PATH"; '
+        'if [ ! -d "local-agent-mode-sessions" ]; then '
+        "exit 0; "
+        "fi; "
+        + _build_remote_hash_xargs_pipeline(parallelism_expr='"$PARALLELISM"')
+    )
+
+
+def _build_remote_hash_xargs_pipeline(parallelism_expr: str) -> str:
+    """Builds remote shell pipeline that hashes session JSON files in parallel."""
+
+    return (
+        "find local-agent-mode-sessions -type f -name 'local_*.json' -print0 | "
+        f"xargs -0 -n 1 -P {parallelism_expr} -I {{}} sh -c "
+        "'file=\"$1\"; hash=\"$(shasum -a 256 \"$file\" | cut -d \" \" -f 1)\"; "
+        "printf \"%s\\t%s\\n\" \"$file\" \"$hash\"' _ {}"
     )
 
 
@@ -347,10 +390,23 @@ def _extract_remote_process_tar(process: subprocess.Popen, target_root: Path) ->
     return stats
 
 
-def _list_remote_session_json_hashes(remote_host: str, remote_profile_path: str) -> Dict[str, str]:
+def _list_remote_session_json_hashes(
+    remote_host: str,
+    remote_profile_path: str,
+    parallel_remote: Optional[int],
+) -> Dict[str, str]:
     """Returns map of remote session JSON relative paths to SHA-256 hashes."""
 
-    command = _build_remote_session_hash_command(remote_profile_path)
+    if parallel_remote is not None and parallel_remote < 1:
+        message = f"parallel_remote must be >= 1, got {parallel_remote}"
+        logger.error(message)
+        raise ValueError(message)
+    if parallel_remote is None:
+        logger.info("Computing remote session hashes with remote CPU-count parallelism")
+        command = _build_remote_session_hash_command(remote_profile_path)
+    else:
+        logger.info("Computing remote session hashes with explicit parallelism=%d", parallel_remote)
+        command = _build_remote_session_hash_command_with_parallel(remote_profile_path, parallel_remote)
     completed = subprocess.run(["ssh", remote_host, command], capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         message = f"Failed to list remote session hashes: {completed.stderr.strip()}"

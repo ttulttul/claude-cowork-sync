@@ -94,6 +94,10 @@ Options:
   - Default behavior excludes `vm_bundles`.
 - `--include-cache-dirs`: include non-essential cache directories during remote fetch + base copy.
   - Default behavior excludes common cache directories (for example `Cache`, `Code Cache`, `GPUCache`, and service worker caches).
+- `--parallel-remote <N>`: set max remote parallelism for session hash computation.
+  - Default uses remote CPU core count.
+- `--parallel-local <N>`: set max local parallelism budget for merge operations.
+  - Currently reserved for upcoming local parallel stages.
 - `--auto-export-browser-state`: export browser state JSONs automatically when not provided.
 - `--headless-browser-state`: use headless Playwright for auto-export.
 

@@ -16,3 +16,4 @@
 - Base profile cloning should use `shutil.copytree(..., symlinks=True)` because Claude session backup trees may contain dangling debug symlinks (`.claude/debug/latest`) that fail when dereferenced.
 - Incremental session tar streams are rooted at the profile directory (not `Claude/`), so extraction target must be `.../remote-profile/Claude` to keep `local-agent-mode-sessions` discoverable for source B.
 - Excluding non-essential cache directories by default (for example `Cache`, `Code Cache`, `GPUCache`, and service worker caches) further cuts remote transfer size while preserving LocalStorage/IndexedDB data needed for merge correctness.
+- Remote session hash collection scales well with `xargs -P`; defaulting to remote CPU core count gives good baseline performance while exposing `--parallel-remote` for constrained hosts.

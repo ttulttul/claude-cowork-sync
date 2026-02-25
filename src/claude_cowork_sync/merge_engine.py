@@ -40,9 +40,15 @@ def merge_profiles(
     force_output_overwrite: bool,
     include_vm_bundles: bool = False,
     include_cache_dirs: bool = False,
+    parallel_local: int = 1,
 ) -> MergeSummary:
     """Merges two Claude profile directories into one output profile."""
 
+    if parallel_local < 1:
+        message = f"parallel_local must be >= 1, got {parallel_local}"
+        logger.error(message)
+        raise ValueError(message)
+    logger.info("Local parallelism configured: %d (future local parallel stages)", parallel_local)
     _validate_input_profiles(profile_a, profile_b)
     _prepare_output_profile(
         profile_a=profile_a,
