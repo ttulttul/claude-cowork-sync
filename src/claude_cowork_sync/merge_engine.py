@@ -110,7 +110,13 @@ def _prepare_output_profile(
     ignore = None if include_vm_bundles else shutil.ignore_patterns("vm_bundles")
     if not include_vm_bundles:
         logger.info("Excluding vm_bundles from base profile copy")
-    shutil.copytree(profile_a, output_profile, ignore=ignore)
+    shutil.copytree(
+        profile_a,
+        output_profile,
+        ignore=ignore,
+        symlinks=True,
+        ignore_dangling_symlinks=True,
+    )
 
 
 def _merge_browser_state_files(

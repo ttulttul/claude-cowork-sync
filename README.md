@@ -74,6 +74,7 @@ Note: SSH profile fetch now preserves safe symlink/hardlink tar entries (for exa
 The fetch step also reports periodic progress (`members`, `files`, `bytes`) during long remote syncs.
 Auto-export requires Playwright; if unavailable, merge now fails fast before remote transfer starts.
 The same preflight also checks that Playwright Chromium binaries are installed before transfer starts.
+Base-profile copy now preserves symlinks (including dangling debug links) to avoid copy failures in `.claude/debug/latest`.
 
 Options:
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,35 @@ def test_merge_profiles_can_include_vm_bundles(tmp_path: Path) -> None:
 
     assert summary.merged_session_count == 1
     assert (summary.output_profile / "vm_bundles/huge.bundle").exists()
+
+
+def test_merge_profiles_handles_dangling_symlink_in_base_profile(tmp_path: Path) -> None:
+    """Copies base profile even when dangling debug symlinks are present."""
+
+    profile_a = _create_minimal_profile(tmp_path / "a")
+    profile_b = _create_minimal_profile(tmp_path / "b")
+    debug_dir = profile_a / "local-agent-mode-sessions/user/org/local_x/.claude/debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    latest = debug_dir / "latest"
+    os.symlink("missing-target.json", latest)
+
+    summary = merge_profiles(
+        profile_a=profile_a,
+        profile_b=profile_b,
+        output_profile=tmp_path / "out",
+        include_sensitive_claude_credentials=False,
+        base_source="a",
+        browser_state_a_path=None,
+        browser_state_b_path=None,
+        browser_state_output_path=None,
+        merge_indexeddb=False,
+        skip_browser_state=True,
+        force_output_overwrite=False,
+    )
+
+    copied_latest = summary.output_profile / "local-agent-mode-sessions/user/org/local_x/.claude/debug/latest"
+    assert copied_latest.is_symlink()
+    assert os.readlink(copied_latest) == "missing-target.json"
 
 
 def _create_minimal_profile(profile: Path) -> Path:
