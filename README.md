@@ -34,6 +34,74 @@ uv run pytest
 - LocalStorage LevelDB: `Local Storage/leveldb/`
 - IndexedDB LevelDB: `IndexedDB/https_claude.ai_0.indexeddb.leveldb/`
 
+## How Claude stores Cowork state
+
+Claude Cowork state is split across filesystem session data and browser-origin storage data.
+
+Filesystem session data:
+- Root: `local-agent-mode-sessions/<user_uuid>/<org_uuid>/`
+- Per session metadata: `local_<session_uuid>.json`
+- Per session event stream: `local_<session_uuid>/audit.jsonl`
+- Per session payloads: `local_<session_uuid>/uploads/*` and `local_<session_uuid>/outputs/*`
+- Per session runtime details: `local_<session_uuid>/.claude/*`
+
+Browser-origin storage data (`https://claude.ai`):
+- `Local Storage/leveldb`: includes keys like `cowork-read-state`, `cc-session-cli-id-*`, `cc-session-cwd-*`
+- `IndexedDB/https_claude.ai_0.indexeddb.leveldb`: includes editor/draft continuity data
+
+Why this matters:
+- Session files alone are not enough to fully restore Cowork behavior.
+- Browser storage alone is not enough to restore full message/event history.
+- A correct merge must combine both layers.
+
+## How the merge works
+
+The tool performs a logical merge, not a raw file rsync.
+
+1. Build source profiles.
+- Local profile A is the baseline source.
+- Profile B is either local (`--profile-b`) or fetched over SSH (`--merge-from`).
+
+2. Fetch remote profile B (when using SSH).
+- Uses incremental transfer against local baseline for session trees.
+- Transfers only remote session trees whose `local_*.json` hash differs, plus remote-only sessions.
+- Excludes remote `vm_bundles` and cache-heavy directories by default.
+- Preserves safe symlinks/hardlinks and reports progress while streaming tar over SSH.
+
+3. Export browser state (when browser-state merge is enabled).
+- Exports LocalStorage and IndexedDB via Playwright APIs.
+- Avoids direct mutation/merge of raw LevelDB internals.
+
+4. Create output profile.
+- Copies local profile A into output as base.
+- Preserves local `vm_bundles`.
+- Excludes non-essential cache directories by default to reduce copy size.
+- Preserves symlinks (including dangling debug links) to avoid copy failures.
+
+5. Merge session filesystem trees.
+- Discovers `local_*.json` records from both sources.
+- Merges shared sessions using timestamp-aware field rules.
+- Merges `audit.jsonl` by dedupe key and timestamp ordering.
+- Merges `uploads/` and `outputs/` by path + content hash with deterministic conflict suffixing.
+- Skips importing secondary `.claude/.credentials.json` unless explicitly allowed.
+
+6. Merge browser state maps.
+- Merges `cowork-read-state` by session union + max timestamp.
+- Rehydrates `cc-session-cli-id-*` and `cc-session-cwd-*` from merged metadata.
+- Merges draft keys using embedded timestamps when available.
+- Keeps unknown keys from base by default, filling absent keys from secondary.
+- Optionally merges IndexedDB records by key with timestamp-aware precedence.
+
+7. Validate merged output.
+- Checks `local_*.json` to folder consistency.
+- Checks required CLI binding keys in LocalStorage.
+- Checks `cowork-read-state.sessions` coverage for merged session IDs.
+
+8. Deploy safely.
+- Keep live profile backup.
+- Atomically swap merged profile into live location.
+- Validate in app and roll back from backup if needed.
+
 ## Workflow
 
 1. Close Claude on both machines.
