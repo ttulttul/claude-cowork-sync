@@ -54,8 +54,8 @@ def test_merge_profiles_succeeds_with_skip_browser_state(tmp_path: Path) -> None
     assert summary.validation.is_valid is True
 
 
-def test_merge_profiles_excludes_vm_bundles_by_default(tmp_path: Path) -> None:
-    """Skips vm_bundles from output profile copy unless explicitly included."""
+def test_merge_profiles_preserves_local_vm_bundles_by_default(tmp_path: Path) -> None:
+    """Preserves local vm_bundles in output profile by default."""
 
     profile_a = _create_minimal_profile(tmp_path / "a")
     profile_b = _create_minimal_profile(tmp_path / "b")
@@ -78,11 +78,11 @@ def test_merge_profiles_excludes_vm_bundles_by_default(tmp_path: Path) -> None:
     )
 
     assert summary.merged_session_count == 1
-    assert not (summary.output_profile / "vm_bundles").exists()
+    assert (summary.output_profile / "vm_bundles/huge.bundle").exists()
 
 
-def test_merge_profiles_can_include_vm_bundles(tmp_path: Path) -> None:
-    """Copies vm_bundles into output when include flag is set."""
+def test_merge_profiles_keeps_local_vm_bundles_when_flag_is_set(tmp_path: Path) -> None:
+    """Still preserves local vm_bundles when include_vm_bundles flag is set."""
 
     profile_a = _create_minimal_profile(tmp_path / "a")
     profile_b = _create_minimal_profile(tmp_path / "b")

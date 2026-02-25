@@ -44,6 +44,8 @@ def merge_profiles(
 ) -> MergeSummary:
     """Merges two Claude profile directories into one output profile."""
 
+    if include_vm_bundles:
+        logger.info("include_vm_bundles applies to remote fetch; local vm_bundles are always preserved")
     if parallel_local < 1:
         message = f"parallel_local must be >= 1, got {parallel_local}"
         logger.error(message)
@@ -54,7 +56,6 @@ def merge_profiles(
         profile_a=profile_a,
         output_profile=output_profile,
         force_output_overwrite=force_output_overwrite,
-        include_vm_bundles=include_vm_bundles,
         include_cache_dirs=include_cache_dirs,
     )
     merged_sessions = merge_session_trees(
@@ -108,7 +109,6 @@ def _prepare_output_profile(
     profile_a: Path,
     output_profile: Path,
     force_output_overwrite: bool,
-    include_vm_bundles: bool,
     include_cache_dirs: bool,
 ) -> None:
     """Creates the output profile by cloning profile A."""
@@ -123,11 +123,8 @@ def _prepare_output_profile(
     logger.info("Copying base profile to output: %s", output_profile)
     ignore = _build_profile_copy_ignore(
         profile_root=profile_a,
-        include_vm_bundles=include_vm_bundles,
         include_cache_dirs=include_cache_dirs,
     )
-    if not include_vm_bundles:
-        logger.info("Excluding vm_bundles from base profile copy")
     if not include_cache_dirs:
         logger.info("Excluding non-essential cache directories from base profile copy")
     shutil.copytree(
@@ -141,14 +138,11 @@ def _prepare_output_profile(
 
 def _build_profile_copy_ignore(
     profile_root: Path,
-    include_vm_bundles: bool,
     include_cache_dirs: bool,
 ) -> Callable[[str, list[str]], set[str]]:
     """Builds copytree ignore callback for non-essential profile directories."""
 
     excluded_rel_paths: set[str] = set()
-    if not include_vm_bundles:
-        excluded_rel_paths.add("vm_bundles")
     if not include_cache_dirs:
         excluded_rel_paths.update(
             {

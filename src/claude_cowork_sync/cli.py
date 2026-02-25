@@ -113,7 +113,7 @@ def _add_merge_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     parser.add_argument(
         "--include-vm-bundles",
         action="store_true",
-        help="Include vm_bundles during remote fetch and local base profile copy (disabled by default).",
+        help="Include remote vm_bundles during SSH fetch (local vm_bundles are always preserved).",
     )
     parser.add_argument(
         "--include-cache-dirs",
