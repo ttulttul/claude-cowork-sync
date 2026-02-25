@@ -168,6 +168,8 @@ Long-running stages now show live terminal progress by default:
 - Colored output in interactive terminals.
 - Remote fetch now attempts a quick metadata pre-count over SSH first, so the main transfer can usually show a progress bar instead of only a spinner.
 - Remote tar creation sets `COPYFILE_DISABLE=1` to avoid synthetic macOS `._*` metadata members, improving transfer size and progress estimate accuracy.
+- Remote fetch stages use distinct labels when incremental transfer is active (`Remote fetch (base profile)` and `Remote fetch (session delta)`).
+- Browser-state export and base-profile preparation now show spinner progress to avoid silent periods between fetch and merge.
 Default logs are now warning-and-higher to keep normal output focused on progress.
 Auto-export requires Playwright; if unavailable, merge now fails fast before remote transfer starts.
 The same preflight also checks that Playwright Chromium binaries are installed before transfer starts.

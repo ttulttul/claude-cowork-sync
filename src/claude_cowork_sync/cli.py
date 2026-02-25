@@ -18,7 +18,7 @@ from typing import Optional, Sequence, Tuple
 from .browser_storage import export_browser_state_with_playwright, import_browser_state_with_playwright, read_browser_state
 from .deploy import atomic_swap_profile
 from .merge_engine import MergeSummary, merge_profiles
-from .progress import colorize_text, terminal_supports_color
+from .progress import colorize_text, run_with_spinner, terminal_supports_color
 from .remote_profile import fetch_remote_profile
 
 logger = logging.getLogger(__name__)
@@ -411,18 +411,30 @@ def _resolve_browser_state_paths(
     browser_state_b = temp_dir / "browser_state_b.json"
     browser_state_output = temp_dir / "browser_state_merged.json"
     logger.info("Auto-exporting browser state for profile A: %s", profile_a)
-    export_browser_state_with_playwright(
-        profile_dir=profile_a,
-        output_path=browser_state_a,
-        origin="https://claude.ai",
-        headless=args.headless_browser_state,
+    run_with_spinner(
+        label="Browser export (A)",
+        detail="reading localStorage + IndexedDB",
+        color="blue",
+        success_detail="exported",
+        action=lambda: export_browser_state_with_playwright(
+            profile_dir=profile_a,
+            output_path=browser_state_a,
+            origin="https://claude.ai",
+            headless=args.headless_browser_state,
+        ),
     )
     logger.info("Auto-exporting browser state for profile B: %s", profile_b)
-    export_browser_state_with_playwright(
-        profile_dir=profile_b,
-        output_path=browser_state_b,
-        origin="https://claude.ai",
-        headless=args.headless_browser_state,
+    run_with_spinner(
+        label="Browser export (B)",
+        detail="reading localStorage + IndexedDB",
+        color="blue",
+        success_detail="exported",
+        action=lambda: export_browser_state_with_playwright(
+            profile_dir=profile_b,
+            output_path=browser_state_b,
+            origin="https://claude.ai",
+            headless=args.headless_browser_state,
+        ),
     )
     return browser_state_a, browser_state_b, browser_state_output
 

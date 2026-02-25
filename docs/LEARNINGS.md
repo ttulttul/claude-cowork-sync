@@ -24,3 +24,5 @@
 - For remote tar streams, a quick metadata-only SSH pre-count (using `find` + prune rules) gives reliable-enough totals to render real progress bars during fetch without reading file contents up front.
 - On macOS remote hosts, setting `COPYFILE_DISABLE=1` for tar avoids synthesized `._*` metadata entries that can double apparent member counts and make pre-count-based progress bars overshoot.
 - For `--merge-from`, safety improves by checking remote processes first and refusing to copy if case-sensitive `Claude` is running remotely; helper-host processes under `Contents/Helpers/...` should be ignored to avoid false positives.
+- Stage-level spinner output is important for perceived reliability: browser-state exports and base-profile copy can be long-running even when no deterministic totals are available.
+- Distinct remote fetch labels (base profile vs session delta) reduce ambiguity when incremental mode performs multiple fetch passes.

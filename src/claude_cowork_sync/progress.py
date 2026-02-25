@@ -7,8 +7,9 @@ import os
 import shutil
 import sys
 from dataclasses import dataclass, field
+from threading import Event, Thread
 from time import monotonic
-from typing import Optional, TextIO
+from typing import Callable, Optional, TextIO, TypeVar, cast
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ _COLORS: dict[str, str] = {
     "yellow": "\033[33m",
 }
 _SPINNER_FRAMES = ("|", "/", "-", "\\")
+T = TypeVar("T")
 
 
 def progress_rendering_enabled(stream: Optional[TextIO] = None) -> bool:
@@ -43,6 +45,51 @@ def colorize_text(text: str, color: str, enabled: bool) -> str:
     """Applies ANSI color to text when enabled."""
 
     return _colorize(text=text, color=color, enabled=enabled)
+
+
+def run_with_spinner(
+    label: str,
+    detail: str,
+    action: Callable[[], T],
+    color: str = "blue",
+    unit: str = "ticks",
+    update_interval_seconds: float = 0.12,
+    success_detail: str = "done",
+) -> T:
+    """Runs an action while showing spinner progress in interactive terminals."""
+
+    if not progress_rendering_enabled():
+        return action()
+    progress = TerminalProgress(
+        label=label,
+        total=None,
+        unit=unit,
+        color=color,
+        min_interval_seconds=update_interval_seconds,
+    )
+    stop_event = Event()
+    ticks = 0
+
+    def _spin() -> None:
+        nonlocal ticks
+        while not stop_event.wait(update_interval_seconds):
+            ticks += 1
+            progress.update(completed=ticks, detail=detail, force=True)
+
+    progress.update(completed=0, detail=detail, force=True)
+    spinner_thread = Thread(target=_spin, daemon=True)
+    spinner_thread.start()
+    succeeded = False
+    result: Optional[T] = None
+    try:
+        result = action()
+        succeeded = True
+    finally:
+        stop_event.set()
+        spinner_thread.join(timeout=1.0)
+        completion_detail = success_detail if succeeded else "failed"
+        progress.finish(completed=ticks, detail=completion_detail, success=succeeded)
+    return cast(T, result)
 
 
 def _progress_enabled() -> bool:

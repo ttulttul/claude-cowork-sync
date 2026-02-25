@@ -11,6 +11,7 @@ from typing import Callable, Optional
 from .browser_storage import merge_browser_states, read_browser_state, write_browser_state
 from .fs_merge import merge_session_trees
 from .models import ValidationResult
+from .progress import run_with_spinner
 from .validate import validate_merged_profile
 
 logger = logging.getLogger(__name__)
@@ -127,12 +128,18 @@ def _prepare_output_profile(
     )
     if not include_cache_dirs:
         logger.info("Excluding non-essential cache directories from base profile copy")
-    shutil.copytree(
-        profile_a,
-        output_profile,
-        ignore=ignore,
-        symlinks=True,
-        ignore_dangling_symlinks=True,
+    run_with_spinner(
+        label="Prepare output",
+        detail="copying base profile",
+        color="yellow",
+        success_detail="copied",
+        action=lambda: shutil.copytree(
+            profile_a,
+            output_profile,
+            ignore=ignore,
+            symlinks=True,
+            ignore_dangling_symlinks=True,
+        ),
     )
 
 

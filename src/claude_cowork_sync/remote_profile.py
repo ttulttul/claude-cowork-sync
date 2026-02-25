@@ -119,6 +119,7 @@ def fetch_remote_profile(
             ),
             target_root=target_root,
             expected_total_members=expected_total_members,
+            progress_label="Remote fetch (full profile)",
         )
     remote_name = _remote_profile_name(remote_profile_path)
     fetched_path = target_root / remote_name
@@ -167,6 +168,7 @@ def _fetch_remote_profile_incremental(
         ),
         target_root=target_root,
         expected_total_members=expected_base_members,
+        progress_label="Remote fetch (base profile)",
     )
     remote_hashes = _list_remote_session_json_hashes(
         remote_host=remote_host,
@@ -208,6 +210,7 @@ def _fetch_remote_profile_incremental(
             remote_profile_path=remote_profile_path,
             relative_paths=transfer_paths,
         ),
+        progress_label="Remote fetch (session delta)",
     )
     return _merge_stats(base_stats, session_stats)
 
@@ -499,6 +502,7 @@ def _fetch_remote_tar_with_command(
     command: str,
     target_root: Path,
     expected_total_members: Optional[int],
+    progress_label: str,
 ) -> _ExtractionStats:
     """Runs remote tar command over SSH and extracts stream into target root."""
 
@@ -511,6 +515,7 @@ def _fetch_remote_tar_with_command(
         process=process,
         target_root=target_root,
         expected_total_members=expected_total_members,
+        progress_label=progress_label,
     )
 
 
@@ -520,6 +525,7 @@ def _fetch_remote_tar_with_path_list(
     target_root: Path,
     relative_paths: Sequence[str],
     expected_total_members: Optional[int],
+    progress_label: str,
 ) -> _ExtractionStats:
     """Runs remote tar-from-path-list command and extracts stream into target root."""
 
@@ -540,6 +546,7 @@ def _fetch_remote_tar_with_path_list(
         process=process,
         target_root=target_root,
         expected_total_members=expected_total_members,
+        progress_label=progress_label,
     )
 
 
@@ -547,10 +554,11 @@ def _extract_remote_process_tar(
     process: subprocess.Popen,
     target_root: Path,
     expected_total_members: Optional[int],
+    progress_label: str,
 ) -> _ExtractionStats:
     """Extracts tar stream from running SSH process and handles errors."""
 
-    progress = TerminalProgress(label="Remote fetch", total=expected_total_members, unit="members", color="cyan")
+    progress = TerminalProgress(label=progress_label, total=expected_total_members, unit="members", color="cyan")
     try:
         stats = _extract_tar_stream(process.stdout, target_root, progress=progress)
     except (tarfile.TarError, OSError, ValueError) as error:
