@@ -18,6 +18,7 @@ from typing import Optional, Sequence, Tuple
 from .browser_storage import export_browser_state_with_playwright, import_browser_state_with_playwright, read_browser_state
 from .deploy import atomic_swap_profile
 from .merge_engine import MergeSummary, merge_profiles
+from .progress import colorize_text, terminal_supports_color
 from .remote_profile import fetch_remote_profile
 
 logger = logging.getLogger(__name__)
@@ -250,8 +251,43 @@ def _run_merge(args: argparse.Namespace) -> int:
             "missingCoworkReadStateSessions": summary.validation.missing_cowork_read_state_sessions,
         },
     }
-    print(json.dumps(result, indent=2))
+    _print_merge_result(result)
     return 0
+
+
+def _print_merge_result(result: dict[str, object]) -> None:
+    """Prints merge result as a colorful summary in TTY mode, JSON otherwise."""
+
+    if not sys.stdout.isatty():
+        print(json.dumps(result, indent=2))
+        return
+    validation = result.get("validation")
+    if not isinstance(validation, dict):
+        print(json.dumps(result, indent=2))
+        return
+    color_enabled = terminal_supports_color(sys.stdout)
+    is_valid = bool(validation.get("isValid"))
+    status_text = "VALID" if is_valid else "INVALID"
+    status_color = "green" if is_valid else "red"
+    print(colorize_text("Merge Result", "cyan", color_enabled))
+    print(f"  status: {colorize_text(status_text, status_color, color_enabled)}")
+    print(f"  output profile: {result.get('outputProfile', '-')}")
+    print(f"  merged sessions: {result.get('mergedSessionCount', '-')}")
+    print(f"  browser state: {result.get('browserStateOutput') or '-'}")
+    print(f"  applied: {result.get('applied')}")
+    if result.get("liveProfile"):
+        print(f"  live profile: {result['liveProfile']}")
+    if result.get("backupProfile"):
+        print(f"  backup profile: {result['backupProfile']}")
+    missing_session_folders = validation.get("missingSessionFolders", [])
+    missing_cli_bindings = validation.get("missingCliBindingKeys", [])
+    missing_read_state = validation.get("missingCoworkReadStateSessions", [])
+    session_folder_count = len(missing_session_folders) if isinstance(missing_session_folders, list) else 0
+    cli_binding_count = len(missing_cli_bindings) if isinstance(missing_cli_bindings, list) else 0
+    read_state_count = len(missing_read_state) if isinstance(missing_read_state, list) else 0
+    print(f"  missing session folders: {session_folder_count}")
+    print(f"  missing CLI bindings: {cli_binding_count}")
+    print(f"  missing read-state sessions: {read_state_count}")
 
 
 def _preflight_browser_state_requirements(args: argparse.Namespace) -> None:

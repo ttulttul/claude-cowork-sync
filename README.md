@@ -165,6 +165,7 @@ Long-running stages now show live terminal progress by default:
 - Progress bars when total work is known (for example session merge/diff stages).
 - Single-line live updates when total work is unknown (for example tar stream extraction).
 - Colored output in interactive terminals.
+- Remote fetch now attempts a quick metadata pre-count over SSH first, so the main transfer can usually show a progress bar instead of only a spinner.
 Default logs are now warning-and-higher to keep normal output focused on progress.
 Auto-export requires Playwright; if unavailable, merge now fails fast before remote transfer starts.
 The same preflight also checks that Playwright Chromium binaries are installed before transfer starts.
@@ -202,6 +203,8 @@ Options:
   - Default is headless mode enabled.
 
 Progress rendering can be disabled with environment variable `COWORK_MERGE_PROGRESS=0`.
+
+When output is a TTY, final merge results are shown as a colorful summary instead of raw JSON.
 
 If Playwright is missing and you want browser-state merge:
 

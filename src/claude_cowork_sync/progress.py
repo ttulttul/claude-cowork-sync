@@ -24,6 +24,27 @@ _COLORS: dict[str, str] = {
 _SPINNER_FRAMES = ("|", "/", "-", "\\")
 
 
+def progress_rendering_enabled(stream: Optional[TextIO] = None) -> bool:
+    """Returns true when live terminal progress rendering should be used."""
+
+    target_stream = stream if stream is not None else sys.stderr
+    tty = hasattr(target_stream, "isatty") and target_stream.isatty()
+    return bool(tty and _progress_enabled())
+
+
+def terminal_supports_color(stream: Optional[TextIO] = None) -> bool:
+    """Returns true when ANSI color output should be used for a stream."""
+
+    target_stream = stream if stream is not None else sys.stderr
+    return _supports_color(target_stream)
+
+
+def colorize_text(text: str, color: str, enabled: bool) -> str:
+    """Applies ANSI color to text when enabled."""
+
+    return _colorize(text=text, color=color, enabled=enabled)
+
+
 def _progress_enabled() -> bool:
     """Returns true when progress rendering is enabled by environment."""
 
@@ -81,8 +102,7 @@ class TerminalProgress:
     def __post_init__(self) -> None:
         """Initializes runtime rendering mode."""
 
-        tty = hasattr(self.stream, "isatty") and self.stream.isatty()
-        self._render_enabled = bool(self.enabled and tty and _progress_enabled())
+        self._render_enabled = bool(self.enabled and progress_rendering_enabled(self.stream))
         self._color_enabled = bool(self._render_enabled and _supports_color(self.stream))
         self._active = self._render_enabled
         logger.debug(

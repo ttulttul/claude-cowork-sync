@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -381,6 +383,64 @@ def test_cli_log_level_defaults_to_warning() -> None:
     args = parser.parse_args(["merge", "--profile-b", "/tmp/profile-b"])
 
     assert args.log_level == "WARNING"
+
+
+def test_print_merge_result_uses_json_when_not_tty() -> None:
+    """Prints JSON payload when stdout is not a TTY."""
+
+    payload: dict[str, object] = {
+        "outputProfile": "/tmp/out",
+        "mergedSessionCount": 1,
+        "browserStateOutput": None,
+        "applied": False,
+        "liveProfile": None,
+        "backupProfile": None,
+        "validation": {
+            "isValid": True,
+            "missingSessionFolders": [],
+            "missingCliBindingKeys": [],
+            "missingCoworkReadStateSessions": [],
+        },
+    }
+    stream = io.StringIO()
+    with contextlib.redirect_stdout(stream):
+        cli._print_merge_result(payload)
+    output = stream.getvalue()
+    assert output.strip().startswith("{")
+    assert '"outputProfile": "/tmp/out"' in output
+
+
+def test_print_merge_result_uses_pretty_summary_when_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prints non-JSON summary output when stdout is a TTY."""
+
+    payload: dict[str, object] = {
+        "outputProfile": "/tmp/out",
+        "mergedSessionCount": 1,
+        "browserStateOutput": None,
+        "applied": True,
+        "liveProfile": "/tmp/live",
+        "backupProfile": "/tmp/backup",
+        "validation": {
+            "isValid": True,
+            "missingSessionFolders": [],
+            "missingCliBindingKeys": [],
+            "missingCoworkReadStateSessions": [],
+        },
+    }
+    monkeypatch.setattr("claude_cowork_sync.cli.terminal_supports_color", lambda stream: False)
+
+    class _TtyStringIO(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    stream = _TtyStringIO()
+    with contextlib.redirect_stdout(stream):
+        cli._print_merge_result(payload)
+    output = stream.getvalue()
+    assert "Merge Result" in output
+    assert "status: VALID" in output
+    assert "output profile: /tmp/out" in output
+    assert not output.strip().startswith("{")
 
 
 def test_merge_headless_browser_state_can_be_disabled() -> None:

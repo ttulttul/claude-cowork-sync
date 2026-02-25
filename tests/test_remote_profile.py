@@ -13,9 +13,11 @@ from typing import Any
 import pytest
 
 from claude_cowork_sync.remote_profile import (
+    _build_remote_count_command,
     _build_remote_session_hash_command,
     _build_remote_session_hash_command_with_parallel,
     _build_remote_tar_command,
+    _parse_positive_count,
     _paths_to_transfer_for_remote_sessions,
     _should_transfer_remote_session_json,
     fetch_remote_profile,
@@ -252,6 +254,32 @@ def test_build_remote_session_hash_command_with_parallel_uses_explicit_limit() -
     )
     assert "PARALLELISM=7" in command
     assert "xargs -0 -n 1 -P \"$PARALLELISM\"" in command
+
+
+def test_build_remote_count_command_applies_expected_prunes() -> None:
+    """Builds metadata-only member count command with prune filters."""
+
+    command = _build_remote_count_command(
+        remote_profile_path="Library/Application Support/Claude",
+        include_vm_bundles=False,
+        include_cache_dirs=False,
+        exclude_local_agent_mode_sessions=True,
+    )
+    assert "find . \\(" in command
+    assert "-path ./vm_bundles" in command
+    assert "-path ./Cache" in command
+    assert "-path ./local-agent-mode-sessions" in command
+    assert "wc -l" in command
+
+
+def test_parse_positive_count_handles_valid_and_invalid_values() -> None:
+    """Parses count command output safely and rejects invalid payloads."""
+
+    assert _parse_positive_count("42\n") == 42
+    assert _parse_positive_count("0") == 0
+    assert _parse_positive_count("-1") is None
+    assert _parse_positive_count("abc") is None
+    assert _parse_positive_count("") is None
 
 
 def test_fetch_remote_profile_rejects_unsafe_tar_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

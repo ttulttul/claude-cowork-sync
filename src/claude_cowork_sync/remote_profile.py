@@ -15,13 +15,24 @@ from tempfile import TemporaryDirectory, mkdtemp
 from time import monotonic
 from typing import BinaryIO, Dict, Iterator, Optional, Sequence
 
-from .progress import TerminalProgress
+from .progress import TerminalProgress, progress_rendering_enabled
 from .utils import sha256_file
 
 logger = logging.getLogger(__name__)
 
 _PROGRESS_MEMBER_INTERVAL = 500
 _PROGRESS_TIME_INTERVAL_SECONDS = 2.5
+_NON_ESSENTIAL_CACHE_DIRS: tuple[str, ...] = (
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "DawnCache",
+    "GrShaderCache",
+    "ShaderCache",
+    "Service Worker/CacheStorage",
+    "Service Worker/ScriptCache",
+    "Network/Cache",
+)
 _NON_ESSENTIAL_CACHE_PATHS: tuple[str, ...] = (
     "$BASE_NAME/Cache",
     "$BASE_NAME/Cache/*",
@@ -88,6 +99,13 @@ def fetch_remote_profile(
             parallel_remote=parallel_remote,
         )
     else:
+        expected_total_members = _estimate_remote_member_count(
+            remote_host=remote_host,
+            remote_profile_path=remote_profile_path,
+            include_vm_bundles=include_vm_bundles,
+            include_cache_dirs=include_cache_dirs,
+            exclude_local_agent_mode_sessions=False,
+        )
         stats = _fetch_remote_tar_with_command(
             remote_host=remote_host,
             command=_build_remote_tar_command(
@@ -97,6 +115,7 @@ def fetch_remote_profile(
                 exclude_local_agent_mode_sessions=False,
             ),
             target_root=target_root,
+            expected_total_members=expected_total_members,
         )
     remote_name = _remote_profile_name(remote_profile_path)
     fetched_path = target_root / remote_name
@@ -128,6 +147,13 @@ def _fetch_remote_profile_incremental(
     """Fetches remote profile while transferring only changed/new session trees."""
 
     logger.info("Using incremental remote fetch against baseline: %s", baseline_profile)
+    expected_base_members = _estimate_remote_member_count(
+        remote_host=remote_host,
+        remote_profile_path=remote_profile_path,
+        include_vm_bundles=include_vm_bundles,
+        include_cache_dirs=include_cache_dirs,
+        exclude_local_agent_mode_sessions=True,
+    )
     base_stats = _fetch_remote_tar_with_command(
         remote_host=remote_host,
         command=_build_remote_tar_command(
@@ -137,6 +163,7 @@ def _fetch_remote_profile_incremental(
             exclude_local_agent_mode_sessions=True,
         ),
         target_root=target_root,
+        expected_total_members=expected_base_members,
     )
     remote_hashes = _list_remote_session_json_hashes(
         remote_host=remote_host,
@@ -173,6 +200,11 @@ def _fetch_remote_profile_incremental(
         command=_build_remote_tar_from_path_list_command(remote_profile_path),
         target_root=incremental_target_root,
         relative_paths=transfer_paths,
+        expected_total_members=_estimate_remote_member_count_for_paths(
+            remote_host=remote_host,
+            remote_profile_path=remote_profile_path,
+            relative_paths=transfer_paths,
+        ),
     )
     return _merge_stats(base_stats, session_stats)
 
@@ -268,6 +300,59 @@ def _build_remote_tar_from_path_list_command(remote_profile_path: str) -> str:
     )
 
 
+def _build_remote_count_command(
+    remote_profile_path: str,
+    include_vm_bundles: bool,
+    include_cache_dirs: bool,
+    exclude_local_agent_mode_sessions: bool,
+) -> str:
+    """Builds remote command to estimate extractable tar members using metadata-only traversal."""
+
+    profile_expr = _remote_path_expression(remote_profile_path)
+    prune_paths = _build_prune_paths(
+        include_vm_bundles=include_vm_bundles,
+        include_cache_dirs=include_cache_dirs,
+        exclude_local_agent_mode_sessions=exclude_local_agent_mode_sessions,
+    )
+    if prune_paths:
+        prune_expr = " -o ".join([f"-path {shlex.quote(path)}" for path in prune_paths])
+        find_expr = f'find . \\( {prune_expr} \\) -prune -o -print | wc -l'
+    else:
+        find_expr = "find . -print | wc -l"
+    return (
+        f"PROFILE_PATH={profile_expr}; "
+        'if [ ! -d "$PROFILE_PATH" ]; then '
+        'echo "Remote profile directory does not exist: $PROFILE_PATH" 1>&2; '
+        "exit 3; "
+        "fi; "
+        'cd "$PROFILE_PATH"; '
+        f"{find_expr}"
+    )
+
+
+def _build_remote_count_from_path_list_command(remote_profile_path: str) -> str:
+    """Builds remote command to estimate tar members for a selected path list from stdin."""
+
+    profile_expr = _remote_path_expression(remote_profile_path)
+    return (
+        f"PROFILE_PATH={profile_expr}; "
+        'if [ ! -d "$PROFILE_PATH" ]; then '
+        'echo "Remote profile directory does not exist: $PROFILE_PATH" 1>&2; '
+        "exit 3; "
+        "fi; "
+        'cd "$PROFILE_PATH"; '
+        "while IFS= read -r ENTRY; do "
+        '[ -n "$ENTRY" ] || continue; '
+        'ENTRY_PATH="./$ENTRY"; '
+        'if [ -d "$ENTRY_PATH" ]; then '
+        'find "$ENTRY_PATH" -print; '
+        'elif [ -e "$ENTRY_PATH" ]; then '
+        'printf "%s\\n" "$ENTRY_PATH"; '
+        "fi; "
+        "done | awk '!seen[$0]++' | wc -l"
+    )
+
+
 def _build_remote_session_hash_command(remote_profile_path: str) -> str:
     """Builds remote command to list session JSON files and SHA-256 hashes."""
 
@@ -350,7 +435,12 @@ def _remote_profile_name(remote_profile_path: str) -> str:
     return profile_name
 
 
-def _fetch_remote_tar_with_command(remote_host: str, command: str, target_root: Path) -> _ExtractionStats:
+def _fetch_remote_tar_with_command(
+    remote_host: str,
+    command: str,
+    target_root: Path,
+    expected_total_members: Optional[int],
+) -> _ExtractionStats:
     """Runs remote tar command over SSH and extracts stream into target root."""
 
     process = subprocess.Popen(["ssh", remote_host, command], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -358,7 +448,11 @@ def _fetch_remote_tar_with_command(remote_host: str, command: str, target_root: 
         message = "Failed to open SSH pipes for profile transfer."
         logger.error(message)
         raise RuntimeError(message)
-    return _extract_remote_process_tar(process=process, target_root=target_root)
+    return _extract_remote_process_tar(
+        process=process,
+        target_root=target_root,
+        expected_total_members=expected_total_members,
+    )
 
 
 def _fetch_remote_tar_with_path_list(
@@ -366,6 +460,7 @@ def _fetch_remote_tar_with_path_list(
     command: str,
     target_root: Path,
     relative_paths: Sequence[str],
+    expected_total_members: Optional[int],
 ) -> _ExtractionStats:
     """Runs remote tar-from-path-list command and extracts stream into target root."""
 
@@ -382,13 +477,21 @@ def _fetch_remote_tar_with_path_list(
     payload = ("\n".join(relative_paths) + "\n").encode("utf-8")
     process.stdin.write(payload)
     process.stdin.close()
-    return _extract_remote_process_tar(process=process, target_root=target_root)
+    return _extract_remote_process_tar(
+        process=process,
+        target_root=target_root,
+        expected_total_members=expected_total_members,
+    )
 
 
-def _extract_remote_process_tar(process: subprocess.Popen, target_root: Path) -> _ExtractionStats:
+def _extract_remote_process_tar(
+    process: subprocess.Popen,
+    target_root: Path,
+    expected_total_members: Optional[int],
+) -> _ExtractionStats:
     """Extracts tar stream from running SSH process and handles errors."""
 
-    progress = TerminalProgress(label="Remote fetch", total=None, unit="members", color="cyan")
+    progress = TerminalProgress(label="Remote fetch", total=expected_total_members, unit="members", color="cyan")
     try:
         stats = _extract_tar_stream(process.stdout, target_root, progress=progress)
     except (tarfile.TarError, OSError, ValueError) as error:
@@ -454,6 +557,88 @@ def _list_remote_session_json_hashes(
             continue
         remote_hashes[relative_path] = file_hash
     return remote_hashes
+
+
+def _estimate_remote_member_count(
+    remote_host: str,
+    remote_profile_path: str,
+    include_vm_bundles: bool,
+    include_cache_dirs: bool,
+    exclude_local_agent_mode_sessions: bool,
+) -> Optional[int]:
+    """Best-effort estimate of remote fetch member total for progress-bar rendering."""
+
+    if not progress_rendering_enabled():
+        return None
+    command = _build_remote_count_command(
+        remote_profile_path=remote_profile_path,
+        include_vm_bundles=include_vm_bundles,
+        include_cache_dirs=include_cache_dirs,
+        exclude_local_agent_mode_sessions=exclude_local_agent_mode_sessions,
+    )
+    completed = subprocess.run(["ssh", remote_host, command], capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        logger.debug("Remote member pre-count failed: %s", completed.stderr.strip())
+        return None
+    return _parse_positive_count(completed.stdout)
+
+
+def _estimate_remote_member_count_for_paths(
+    remote_host: str,
+    remote_profile_path: str,
+    relative_paths: Sequence[str],
+) -> Optional[int]:
+    """Best-effort estimate of remote fetch member total for path-list tar streams."""
+
+    if not progress_rendering_enabled():
+        return None
+    if not relative_paths:
+        return 0
+    payload = "\n".join(relative_paths) + "\n"
+    command = _build_remote_count_from_path_list_command(remote_profile_path)
+    completed = subprocess.run(
+        ["ssh", remote_host, command],
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        logger.debug("Remote path-list member pre-count failed: %s", completed.stderr.strip())
+        return None
+    return _parse_positive_count(completed.stdout)
+
+
+def _parse_positive_count(raw: str) -> Optional[int]:
+    """Parses a non-negative integer count from shell command output."""
+
+    value = raw.strip()
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def _build_prune_paths(
+    include_vm_bundles: bool,
+    include_cache_dirs: bool,
+    exclude_local_agent_mode_sessions: bool,
+) -> list[str]:
+    """Builds relative root paths to prune for remote pre-count traversal."""
+
+    paths: list[str] = []
+    if not include_vm_bundles:
+        paths.append("./vm_bundles")
+    if not include_cache_dirs:
+        paths.extend([f"./{cache_dir}" for cache_dir in _NON_ESSENTIAL_CACHE_DIRS])
+    if exclude_local_agent_mode_sessions:
+        paths.append("./local-agent-mode-sessions")
+    return paths
 
 
 def _paths_to_transfer_for_remote_sessions(
