@@ -67,7 +67,7 @@ This mode:
 2. Fetches remote profile B from SSH host at default path `~/Library/Application Support/Claude`.
 3. Writes merged output to a unique path in the system temp directory like `.../claude-cowork-merged-<timestamp>`.
 4. Uses your local profile as a baseline and only transfers remote session trees whose `local_*.json` hash differs (plus remote-only sessions).
-5. Excludes `vm_bundles` by default to avoid transferring/copying large VM images.
+5. Excludes `vm_bundles` and non-essential Chromium cache directories by default to reduce transfer size.
 6. Auto-exports browser state for both profiles and performs the same merge + validation flow.
 
 Note: SSH profile fetch now preserves safe symlink/hardlink tar entries (for example debug pointers like `.../debug/latest`).
@@ -92,6 +92,8 @@ Options:
   - Default is a unique temp path under the system temp directory.
 - `--include-vm-bundles`: include `vm_bundles` during remote fetch + base profile copy.
   - Default behavior excludes `vm_bundles`.
+- `--include-cache-dirs`: include non-essential cache directories during remote fetch + base copy.
+  - Default behavior excludes common cache directories (for example `Cache`, `Code Cache`, `GPUCache`, and service worker caches).
 - `--auto-export-browser-state`: export browser state JSONs automatically when not provided.
 - `--headless-browser-state`: use headless Playwright for auto-export.
 

@@ -15,3 +15,4 @@
 - Remote fetch throughput improves substantially by baseline-aware session transfer: fetch non-session profile content once, then transfer only remote session trees whose `local_*.json` hash differs from local baseline (plus remote-only sessions).
 - Base profile cloning should use `shutil.copytree(..., symlinks=True)` because Claude session backup trees may contain dangling debug symlinks (`.claude/debug/latest`) that fail when dereferenced.
 - Incremental session tar streams are rooted at the profile directory (not `Claude/`), so extraction target must be `.../remote-profile/Claude` to keep `local-agent-mode-sessions` discoverable for source B.
+- Excluding non-essential cache directories by default (for example `Cache`, `Code Cache`, `GPUCache`, and service worker caches) further cuts remote transfer size while preserving LocalStorage/IndexedDB data needed for merge correctness.

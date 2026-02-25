@@ -96,6 +96,11 @@ def _add_merge_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         action="store_true",
         help="Include vm_bundles during remote fetch and local base profile copy (disabled by default).",
     )
+    parser.add_argument(
+        "--include-cache-dirs",
+        action="store_true",
+        help="Include non-essential cache directories during remote fetch and base profile copy.",
+    )
     parser.add_argument("--force", action="store_true", help="Overwrite output profile if it exists.")
     parser.add_argument(
         "--include-sensitive-claude-credentials",
@@ -187,6 +192,7 @@ def _run_merge(args: argparse.Namespace) -> int:
             skip_browser_state=args.skip_browser_state,
             force_output_overwrite=args.force,
             include_vm_bundles=args.include_vm_bundles,
+            include_cache_dirs=args.include_cache_dirs,
         )
     result = {
         "outputProfile": str(summary.output_profile),
@@ -281,6 +287,7 @@ def _resolve_profile_b(args: argparse.Namespace, stack: ExitStack) -> Path:
             temp_parent=temp_parent,
             include_vm_bundles=args.include_vm_bundles,
             baseline_profile=args.profile_a,
+            include_cache_dirs=args.include_cache_dirs,
         )
         logger.info("Fetched remote profile to local temp path: %s", fetched)
         return fetched

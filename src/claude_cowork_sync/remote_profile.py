@@ -21,6 +21,26 @@ logger = logging.getLogger(__name__)
 
 _PROGRESS_MEMBER_INTERVAL = 500
 _PROGRESS_TIME_INTERVAL_SECONDS = 2.5
+_NON_ESSENTIAL_CACHE_PATHS: tuple[str, ...] = (
+    "$BASE_NAME/Cache",
+    "$BASE_NAME/Cache/*",
+    "$BASE_NAME/Code Cache",
+    "$BASE_NAME/Code Cache/*",
+    "$BASE_NAME/GPUCache",
+    "$BASE_NAME/GPUCache/*",
+    "$BASE_NAME/DawnCache",
+    "$BASE_NAME/DawnCache/*",
+    "$BASE_NAME/GrShaderCache",
+    "$BASE_NAME/GrShaderCache/*",
+    "$BASE_NAME/ShaderCache",
+    "$BASE_NAME/ShaderCache/*",
+    "$BASE_NAME/Service Worker/CacheStorage",
+    "$BASE_NAME/Service Worker/CacheStorage/*",
+    "$BASE_NAME/Service Worker/ScriptCache",
+    "$BASE_NAME/Service Worker/ScriptCache/*",
+    "$BASE_NAME/Network/Cache",
+    "$BASE_NAME/Network/Cache/*",
+)
 
 
 @dataclass
@@ -42,6 +62,7 @@ def fetch_remote_profile(
     temp_parent: Optional[Path] = None,
     include_vm_bundles: bool = False,
     baseline_profile: Optional[Path] = None,
+    include_cache_dirs: bool = False,
 ) -> Path:
     """Fetches a remote Claude profile over SSH into a local temporary directory."""
 
@@ -52,6 +73,8 @@ def fetch_remote_profile(
     _ensure_ssh_available()
     target_root = _create_target_root(temp_parent=temp_parent)
     logger.info("Fetching remote profile from %s:%s", remote_host, remote_profile_path)
+    if not include_cache_dirs:
+        logger.info("Pruning non-essential cache directories from remote transfer")
     if baseline_profile is not None and baseline_profile.exists():
         stats = _fetch_remote_profile_incremental(
             remote_host=remote_host,
@@ -59,6 +82,7 @@ def fetch_remote_profile(
             include_vm_bundles=include_vm_bundles,
             target_root=target_root,
             baseline_profile=baseline_profile,
+            include_cache_dirs=include_cache_dirs,
         )
     else:
         stats = _fetch_remote_tar_with_command(
@@ -66,6 +90,7 @@ def fetch_remote_profile(
             command=_build_remote_tar_command(
                 remote_profile_path=remote_profile_path,
                 include_vm_bundles=include_vm_bundles,
+                include_cache_dirs=include_cache_dirs,
                 exclude_local_agent_mode_sessions=False,
             ),
             target_root=target_root,
@@ -94,6 +119,7 @@ def _fetch_remote_profile_incremental(
     include_vm_bundles: bool,
     target_root: Path,
     baseline_profile: Path,
+    include_cache_dirs: bool,
 ) -> _ExtractionStats:
     """Fetches remote profile while transferring only changed/new session trees."""
 
@@ -103,6 +129,7 @@ def _fetch_remote_profile_incremental(
         command=_build_remote_tar_command(
             remote_profile_path=remote_profile_path,
             include_vm_bundles=include_vm_bundles,
+            include_cache_dirs=include_cache_dirs,
             exclude_local_agent_mode_sessions=True,
         ),
         target_root=target_root,
@@ -172,6 +199,7 @@ def _create_target_root(temp_parent: Optional[Path]) -> Path:
 def _build_remote_tar_command(
     remote_profile_path: str,
     include_vm_bundles: bool,
+    include_cache_dirs: bool,
     exclude_local_agent_mode_sessions: bool = False,
 ) -> str:
     """Builds a remote shell command that streams a tar archive to stdout."""
@@ -180,6 +208,8 @@ def _build_remote_tar_command(
     excludes: list[str] = []
     if not include_vm_bundles:
         excludes.extend(['--exclude="$BASE_NAME/vm_bundles"', '--exclude="$BASE_NAME/vm_bundles/*"'])
+    if not include_cache_dirs:
+        excludes.extend([f'--exclude="{path}"' for path in _NON_ESSENTIAL_CACHE_PATHS])
     if exclude_local_agent_mode_sessions:
         excludes.extend(
             [

@@ -187,7 +187,11 @@ def _sha256_text(text: str) -> str:
 def test_build_remote_tar_command_excludes_vm_bundles_by_default() -> None:
     """Adds vm_bundles exclude patterns to remote tar command by default."""
 
-    command = _build_remote_tar_command("Library/Application Support/Claude", include_vm_bundles=False)
+    command = _build_remote_tar_command(
+        "Library/Application Support/Claude",
+        include_vm_bundles=False,
+        include_cache_dirs=False,
+    )
     assert '--exclude="$BASE_NAME/vm_bundles"' in command
     assert '--exclude="$BASE_NAME/vm_bundles/*"' in command
 
@@ -195,8 +199,37 @@ def test_build_remote_tar_command_excludes_vm_bundles_by_default() -> None:
 def test_build_remote_tar_command_can_include_vm_bundles() -> None:
     """Omits vm_bundles exclude patterns when include flag is set."""
 
-    command = _build_remote_tar_command("Library/Application Support/Claude", include_vm_bundles=True)
+    command = _build_remote_tar_command(
+        "Library/Application Support/Claude",
+        include_vm_bundles=True,
+        include_cache_dirs=False,
+    )
     assert "vm_bundles" not in command
+
+
+def test_build_remote_tar_command_excludes_caches_by_default() -> None:
+    """Adds cache exclusion patterns unless include_cache_dirs is requested."""
+
+    command = _build_remote_tar_command(
+        "Library/Application Support/Claude",
+        include_vm_bundles=True,
+        include_cache_dirs=False,
+    )
+    assert '--exclude="$BASE_NAME/Cache"' in command
+    assert '--exclude="$BASE_NAME/Code Cache"' in command
+    assert '--exclude="$BASE_NAME/Service Worker/CacheStorage"' in command
+
+
+def test_build_remote_tar_command_can_include_caches() -> None:
+    """Omits cache exclusion patterns when include_cache_dirs is true."""
+
+    command = _build_remote_tar_command(
+        "Library/Application Support/Claude",
+        include_vm_bundles=True,
+        include_cache_dirs=True,
+    )
+    assert "--exclude=\"$BASE_NAME/Cache\"" not in command
+    assert "--exclude=\"$BASE_NAME/Code Cache\"" not in command
 
 
 def test_fetch_remote_profile_rejects_unsafe_tar_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -6,7 +6,7 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .browser_storage import merge_browser_states, read_browser_state, write_browser_state
 from .fs_merge import merge_session_trees
@@ -39,11 +39,18 @@ def merge_profiles(
     skip_browser_state: bool,
     force_output_overwrite: bool,
     include_vm_bundles: bool = False,
+    include_cache_dirs: bool = False,
 ) -> MergeSummary:
     """Merges two Claude profile directories into one output profile."""
 
     _validate_input_profiles(profile_a, profile_b)
-    _prepare_output_profile(profile_a, output_profile, force_output_overwrite, include_vm_bundles)
+    _prepare_output_profile(
+        profile_a=profile_a,
+        output_profile=output_profile,
+        force_output_overwrite=force_output_overwrite,
+        include_vm_bundles=include_vm_bundles,
+        include_cache_dirs=include_cache_dirs,
+    )
     merged_sessions = merge_session_trees(
         profile_a=profile_a,
         profile_b=profile_b,
@@ -96,6 +103,7 @@ def _prepare_output_profile(
     output_profile: Path,
     force_output_overwrite: bool,
     include_vm_bundles: bool,
+    include_cache_dirs: bool,
 ) -> None:
     """Creates the output profile by cloning profile A."""
 
@@ -107,9 +115,15 @@ def _prepare_output_profile(
         logger.warning("Removing existing output profile: %s", output_profile)
         shutil.rmtree(output_profile)
     logger.info("Copying base profile to output: %s", output_profile)
-    ignore = None if include_vm_bundles else shutil.ignore_patterns("vm_bundles")
+    ignore = _build_profile_copy_ignore(
+        profile_root=profile_a,
+        include_vm_bundles=include_vm_bundles,
+        include_cache_dirs=include_cache_dirs,
+    )
     if not include_vm_bundles:
         logger.info("Excluding vm_bundles from base profile copy")
+    if not include_cache_dirs:
+        logger.info("Excluding non-essential cache directories from base profile copy")
     shutil.copytree(
         profile_a,
         output_profile,
@@ -117,6 +131,48 @@ def _prepare_output_profile(
         symlinks=True,
         ignore_dangling_symlinks=True,
     )
+
+
+def _build_profile_copy_ignore(
+    profile_root: Path,
+    include_vm_bundles: bool,
+    include_cache_dirs: bool,
+) -> Callable[[str, list[str]], set[str]]:
+    """Builds copytree ignore callback for non-essential profile directories."""
+
+    excluded_rel_paths: set[str] = set()
+    if not include_vm_bundles:
+        excluded_rel_paths.add("vm_bundles")
+    if not include_cache_dirs:
+        excluded_rel_paths.update(
+            {
+                "Cache",
+                "Code Cache",
+                "GPUCache",
+                "DawnCache",
+                "GrShaderCache",
+                "ShaderCache",
+                "Service Worker/CacheStorage",
+                "Service Worker/ScriptCache",
+                "Network/Cache",
+            }
+        )
+    resolved_root = profile_root.resolve()
+
+    def _ignore(current_dir: str, names: list[str]) -> set[str]:
+        current_path = Path(current_dir).resolve()
+        try:
+            current_rel = current_path.relative_to(resolved_root)
+        except ValueError:
+            return set()
+        skipped: set[str] = set()
+        for name in names:
+            child_rel = current_rel / name if str(current_rel) != "." else Path(name)
+            if child_rel.as_posix() in excluded_rel_paths:
+                skipped.add(name)
+        return skipped
+
+    return _ignore
 
 
 def _merge_browser_state_files(
