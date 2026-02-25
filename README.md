@@ -167,7 +167,7 @@ Long-running stages now show live terminal progress by default:
 - Progress bars when total work is known (for example session merge/diff stages).
 - Single-line live updates when total work is unknown (for example tar stream extraction).
 - Colored output in interactive terminals.
-- Remote fetch now attempts a quick metadata pre-count over SSH first, so the main transfer can usually show a progress bar instead of only a spinner.
+- Remote fetch progress is byte-based and updates continuously while large files stream, which avoids long stalls and jumpy member counters.
 - Remote tar creation sets `COPYFILE_DISABLE=1` to avoid synthetic macOS `._*` metadata members, improving transfer size and progress estimate accuracy.
 - Remote fetch stages use distinct labels when incremental transfer is active (`Remote fetch (base profile)` and `Remote fetch (session delta)`).
 - Browser-state export and base-profile preparation now show spinner progress to avoid silent periods between fetch and merge.

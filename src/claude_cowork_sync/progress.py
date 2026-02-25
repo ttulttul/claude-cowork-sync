@@ -134,6 +134,7 @@ class TerminalProgress:
     label: str
     total: Optional[int]
     unit: str
+    value_formatter: Optional[Callable[[int], str]] = None
     color: str = "cyan"
     min_interval_seconds: float = 0.08
     stream: TextIO = field(default_factory=lambda: sys.stderr)
@@ -195,20 +196,22 @@ class TerminalProgress:
         """Builds one printable progress line."""
 
         label = _colorize(self.label, self.color, self._color_enabled)
+        completed_text = self._format_value(completed)
         if self.total is not None and self.total > 0:
+            total_text = self._format_value(self.total)
             if completed <= self.total:
                 bar = self._progress_bar(completed=completed, total=self.total)
                 ratio = min(1.0, max(0.0, float(completed) / float(self.total)))
                 percent = int(ratio * 100)
-                body = f"{bar} {percent:3d}% {completed}/{self.total} {self.unit}"
+                body = f"{bar} {percent:3d}% {completed_text}/{total_text} {self.unit}"
             else:
                 spinner = _SPINNER_FRAMES[self._spinner_index % len(_SPINNER_FRAMES)]
                 self._spinner_index += 1
-                body = f"{spinner} {completed} {self.unit} (est {self.total})"
+                body = f"{spinner} {completed_text} {self.unit} (est {total_text})"
         else:
             spinner = _SPINNER_FRAMES[self._spinner_index % len(_SPINNER_FRAMES)]
             self._spinner_index += 1
-            body = f"{spinner} {completed} {self.unit}"
+            body = f"{spinner} {completed_text} {self.unit}"
         message = f"{label}: {body}"
         if detail:
             message = f"{message}  {detail}"
@@ -234,3 +237,10 @@ class TerminalProgress:
         if extra == 0:
             return line
         return f"{line}{' ' * extra}"
+
+    def _format_value(self, value: int) -> str:
+        """Formats a numeric progress value with optional custom formatter."""
+
+        if self.value_formatter is None:
+            return str(value)
+        return self.value_formatter(value)

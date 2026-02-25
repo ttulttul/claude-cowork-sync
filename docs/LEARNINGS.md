@@ -27,3 +27,4 @@
 - Stage-level spinner output is important for perceived reliability: browser-state exports and base-profile copy can be long-running even when no deterministic totals are available.
 - Distinct remote fetch labels (base profile vs session delta) reduce ambiguity when incremental mode performs multiple fetch passes.
 - Back-to-back `--merge-from` runs should avoid re-copying unchanged base-profile files by hashing remote non-session files and transferring only paths whose content differs from the local baseline.
+- For remote tar extraction UX, byte-based progress updated per copy chunk is much more stable than member-count bars, because large files otherwise make progress appear frozen and then jump abruptly.

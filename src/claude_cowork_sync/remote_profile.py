@@ -21,6 +21,7 @@ from .utils import sha256_file
 
 logger = logging.getLogger(__name__)
 _CLAUDE_HELPER_PROCESS_PATTERN = re.compile(r"Contents/Helpers/.+")
+_COPY_CHUNK_SIZE = 1024 * 1024
 
 _PROGRESS_MEMBER_INTERVAL = 500
 _PROGRESS_TIME_INTERVAL_SECONDS = 2.5
@@ -102,13 +103,6 @@ def fetch_remote_profile(
             parallel_remote=parallel_remote,
         )
     else:
-        expected_total_members = _estimate_remote_member_count(
-            remote_host=remote_host,
-            remote_profile_path=remote_profile_path,
-            include_vm_bundles=include_vm_bundles,
-            include_cache_dirs=include_cache_dirs,
-            exclude_local_agent_mode_sessions=False,
-        )
         stats = _fetch_remote_tar_with_command(
             remote_host=remote_host,
             command=_build_remote_tar_command(
@@ -118,7 +112,6 @@ def fetch_remote_profile(
                 exclude_local_agent_mode_sessions=False,
             ),
             target_root=target_root,
-            expected_total_members=expected_total_members,
             progress_label="Remote fetch (full profile)",
         )
     remote_name = _remote_profile_name(remote_profile_path)
@@ -189,11 +182,6 @@ def _fetch_remote_profile_incremental(
             command=_build_remote_tar_from_path_list_command(remote_profile_path),
             target_root=incremental_target_root,
             relative_paths=base_transfer_paths,
-            expected_total_members=_estimate_remote_member_count_for_paths(
-                remote_host=remote_host,
-                remote_profile_path=remote_profile_path,
-                relative_paths=base_transfer_paths,
-            ),
             progress_label="Remote fetch (base profile)",
         )
     remote_hashes = _list_remote_session_json_hashes(
@@ -229,11 +217,6 @@ def _fetch_remote_profile_incremental(
         command=_build_remote_tar_from_path_list_command(remote_profile_path),
         target_root=incremental_target_root,
         relative_paths=transfer_paths,
-        expected_total_members=_estimate_remote_member_count_for_paths(
-            remote_host=remote_host,
-            remote_profile_path=remote_profile_path,
-            relative_paths=transfer_paths,
-        ),
         progress_label="Remote fetch (session delta)",
     )
     return _merge_stats(base_stats, session_stats)
@@ -572,7 +555,6 @@ def _fetch_remote_tar_with_command(
     remote_host: str,
     command: str,
     target_root: Path,
-    expected_total_members: Optional[int],
     progress_label: str,
 ) -> _ExtractionStats:
     """Runs remote tar command over SSH and extracts stream into target root."""
@@ -585,7 +567,6 @@ def _fetch_remote_tar_with_command(
     return _extract_remote_process_tar(
         process=process,
         target_root=target_root,
-        expected_total_members=expected_total_members,
         progress_label=progress_label,
     )
 
@@ -595,7 +576,6 @@ def _fetch_remote_tar_with_path_list(
     command: str,
     target_root: Path,
     relative_paths: Sequence[str],
-    expected_total_members: Optional[int],
     progress_label: str,
 ) -> _ExtractionStats:
     """Runs remote tar-from-path-list command and extracts stream into target root."""
@@ -616,7 +596,6 @@ def _fetch_remote_tar_with_path_list(
     return _extract_remote_process_tar(
         process=process,
         target_root=target_root,
-        expected_total_members=expected_total_members,
         progress_label=progress_label,
     )
 
@@ -624,12 +603,17 @@ def _fetch_remote_tar_with_path_list(
 def _extract_remote_process_tar(
     process: subprocess.Popen,
     target_root: Path,
-    expected_total_members: Optional[int],
     progress_label: str,
 ) -> _ExtractionStats:
     """Extracts tar stream from running SSH process and handles errors."""
 
-    progress = TerminalProgress(label=progress_label, total=expected_total_members, unit="members", color="cyan")
+    progress = TerminalProgress(
+        label=progress_label,
+        total=None,
+        unit="bytes",
+        color="cyan",
+        value_formatter=_format_bytes,
+    )
     try:
         stats = _extract_tar_stream(process.stdout, target_root, progress=progress)
     except (tarfile.TarError, OSError, ValueError) as error:
@@ -644,7 +628,7 @@ def _extract_remote_process_tar(
     return_code = process.wait()
     if return_code != 0:
         progress.finish(
-            completed=stats.members_seen,
+            completed=stats.extracted_bytes,
             detail=f"ssh_exit={return_code}",
             success=False,
         )
@@ -652,7 +636,7 @@ def _extract_remote_process_tar(
         logger.error(message)
         raise RuntimeError(message)
     progress.finish(
-        completed=stats.members_seen,
+        completed=stats.extracted_bytes,
         detail=_format_progress_detail(stats),
         success=True,
     )
@@ -890,7 +874,7 @@ def _extract_tar_stream(
     last_progress_render = monotonic()
     with tarfile.open(fileobj=stream, mode="r|*") as archive:
         for member in archive:
-            _extract_member(archive=archive, member=member, destination=destination, stats=stats)
+            _extract_member(archive=archive, member=member, destination=destination, stats=stats, progress=progress)
             last_progress_log = _maybe_log_extraction_progress(stats=stats, last_log=last_progress_log)
             last_progress_render = _maybe_render_extraction_progress(
                 stats=stats,
@@ -898,7 +882,7 @@ def _extract_tar_stream(
                 last_render=last_progress_render,
             )
     if progress is not None:
-        progress.update(completed=stats.members_seen, detail=_format_progress_detail(stats), force=True)
+        progress.update(completed=stats.extracted_bytes, detail=_format_progress_detail(stats), force=True)
     return stats
 
 
@@ -907,6 +891,7 @@ def _extract_member(
     member: tarfile.TarInfo,
     destination: Path,
     stats: _ExtractionStats,
+    progress: Optional[TerminalProgress],
 ) -> None:
     """Extracts one tar member safely."""
 
@@ -917,7 +902,13 @@ def _extract_member(
         stats.directories += 1
         return
     if member.isfile():
-        _extract_regular_file(archive=archive, member=member, target_path=target_path, stats=stats)
+        _extract_regular_file(
+            archive=archive,
+            member=member,
+            target_path=target_path,
+            stats=stats,
+            progress=progress,
+        )
         stats.regular_files += 1
         return
     if member.issym():
@@ -956,6 +947,7 @@ def _extract_regular_file(
     member: tarfile.TarInfo,
     target_path: Path,
     stats: _ExtractionStats,
+    progress: Optional[TerminalProgress],
 ) -> None:
     """Extracts a regular file member payload into target path."""
 
@@ -967,8 +959,14 @@ def _extract_regular_file(
     target_path.parent.mkdir(parents=True, exist_ok=True)
     _replace_existing_path(target_path)
     with fileobj, target_path.open("wb") as handle:
-        shutil.copyfileobj(fileobj, handle)
-    stats.extracted_bytes += max(0, member.size)
+        while True:
+            chunk = fileobj.read(_COPY_CHUNK_SIZE)
+            if not chunk:
+                break
+            handle.write(chunk)
+            stats.extracted_bytes += len(chunk)
+            if progress is not None:
+                progress.update(completed=stats.extracted_bytes, detail=_format_progress_detail(stats))
     _apply_member_times(target_path=target_path, member=member)
 
 
@@ -1076,7 +1074,7 @@ def _maybe_render_extraction_progress(
     )
     if not should_render:
         return last_render
-    progress.update(completed=stats.members_seen, detail=_format_progress_detail(stats))
+    progress.update(completed=stats.extracted_bytes, detail=_format_progress_detail(stats))
     return now
 
 
@@ -1084,9 +1082,9 @@ def _format_progress_detail(stats: _ExtractionStats) -> str:
     """Formats extraction detail text for progress rendering."""
 
     return (
+        f"members={stats.members_seen} "
         f"files={stats.regular_files} "
-        f"links={stats.symlinks + stats.hardlinks} "
-        f"bytes={_format_bytes(stats.extracted_bytes)}"
+        f"links={stats.symlinks + stats.hardlinks}"
     )
 
 
