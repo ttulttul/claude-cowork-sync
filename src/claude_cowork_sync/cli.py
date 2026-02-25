@@ -280,6 +280,7 @@ def _resolve_profile_b(args: argparse.Namespace, stack: ExitStack) -> Path:
             remote_profile_path=args.remote_profile_path,
             temp_parent=temp_parent,
             include_vm_bundles=args.include_vm_bundles,
+            baseline_profile=args.profile_a,
         )
         logger.info("Fetched remote profile to local temp path: %s", fetched)
         return fetched

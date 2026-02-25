@@ -27,11 +27,13 @@ def test_merge_from_with_only_host_uses_default_paths(
         remote_profile_path: str,
         temp_parent: Path,
         include_vm_bundles: bool,
+        baseline_profile: Path,
     ) -> Path:
         captured["remote_host"] = remote_host
         captured["remote_profile_path"] = remote_profile_path
         captured["temp_parent"] = temp_parent
         captured["include_vm_bundles"] = include_vm_bundles
+        captured["baseline_profile"] = baseline_profile
         return fetched_profile
 
     def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
@@ -66,6 +68,7 @@ def test_merge_from_with_only_host_uses_default_paths(
     assert Path(captured["output_profile"]).name.startswith("claude-cowork-merged-")
     assert captured["remote_profile_path"] == "Library/Application Support/Claude"
     assert captured["include_vm_bundles"] is False
+    assert captured["baseline_profile"] == profile_a
 
 
 def test_merge_from_uses_fetched_remote_profile(
@@ -84,10 +87,12 @@ def test_merge_from_uses_fetched_remote_profile(
         remote_profile_path: str,
         temp_parent: Path,
         include_vm_bundles: bool,
+        baseline_profile: Path,
     ) -> Path:
         captured["remote_host"] = remote_host
         captured["temp_parent"] = temp_parent
         captured["include_vm_bundles"] = include_vm_bundles
+        captured["baseline_profile"] = baseline_profile
         return fetched_profile
 
     def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
@@ -118,6 +123,7 @@ def test_merge_from_uses_fetched_remote_profile(
     assert exit_code == 0
     assert captured["profile_b"] == fetched_profile
     assert captured["include_vm_bundles"] is False
+    assert captured["baseline_profile"] == profile_a
 
 
 def test_merge_from_can_include_vm_bundles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -133,8 +139,10 @@ def test_merge_from_can_include_vm_bundles(monkeypatch: pytest.MonkeyPatch, tmp_
         remote_profile_path: str,
         temp_parent: Path,
         include_vm_bundles: bool,
+        baseline_profile: Path,
     ) -> Path:
         captured["include_vm_bundles_fetch"] = include_vm_bundles
+        captured["baseline_profile"] = baseline_profile
         return fetched_profile
 
     def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
@@ -166,6 +174,7 @@ def test_merge_from_can_include_vm_bundles(monkeypatch: pytest.MonkeyPatch, tmp_
     assert exit_code == 0
     assert captured["include_vm_bundles_fetch"] is True
     assert captured["include_vm_bundles_merge"] is True
+    assert captured["baseline_profile"] == profile_a
 
 
 def test_merge_from_fails_fast_without_playwright_before_remote_fetch(

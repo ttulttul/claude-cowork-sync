@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory, mkdtemp
 from time import monotonic
-from typing import BinaryIO, Iterator, Optional
+from typing import BinaryIO, Dict, Iterator, Optional, Sequence
+
+from .utils import sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ def fetch_remote_profile(
     remote_profile_path: str,
     temp_parent: Optional[Path] = None,
     include_vm_bundles: bool = False,
+    baseline_profile: Optional[Path] = None,
 ) -> Path:
     """Fetches a remote Claude profile over SSH into a local temporary directory."""
 
@@ -48,28 +51,25 @@ def fetch_remote_profile(
         raise ValueError(message)
     _ensure_ssh_available()
     target_root = _create_target_root(temp_parent=temp_parent)
-    command = ["ssh", remote_host, _build_remote_tar_command(remote_profile_path, include_vm_bundles)]
     logger.info("Fetching remote profile from %s:%s", remote_host, remote_profile_path)
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if process.stdout is None or process.stderr is None:
-        message = "Failed to open SSH pipes for profile transfer."
-        logger.error(message)
-        raise RuntimeError(message)
-    try:
-        stats = _extract_tar_stream(process.stdout, target_root)
-    except (tarfile.TarError, OSError, ValueError) as error:
-        stderr_output = process.stderr.read().decode("utf-8", errors="replace")
-        process.kill()
-        process.wait()
-        message = f"Failed to extract remote profile stream: {stderr_output.strip() or str(error)}"
-        logger.error(message)
-        raise RuntimeError(message) from error
-    stderr_output = process.stderr.read().decode("utf-8", errors="replace")
-    return_code = process.wait()
-    if return_code != 0:
-        message = f"SSH transfer failed (exit {return_code}): {stderr_output.strip()}"
-        logger.error(message)
-        raise RuntimeError(message)
+    if baseline_profile is not None and baseline_profile.exists():
+        stats = _fetch_remote_profile_incremental(
+            remote_host=remote_host,
+            remote_profile_path=remote_profile_path,
+            include_vm_bundles=include_vm_bundles,
+            target_root=target_root,
+            baseline_profile=baseline_profile,
+        )
+    else:
+        stats = _fetch_remote_tar_with_command(
+            remote_host=remote_host,
+            command=_build_remote_tar_command(
+                remote_profile_path=remote_profile_path,
+                include_vm_bundles=include_vm_bundles,
+                exclude_local_agent_mode_sessions=False,
+            ),
+            target_root=target_root,
+        )
     remote_name = _remote_profile_name(remote_profile_path)
     fetched_path = target_root / remote_name
     if not fetched_path.exists():
@@ -86,6 +86,57 @@ def fetch_remote_profile(
         _format_bytes(stats.extracted_bytes),
     )
     return fetched_path
+
+
+def _fetch_remote_profile_incremental(
+    remote_host: str,
+    remote_profile_path: str,
+    include_vm_bundles: bool,
+    target_root: Path,
+    baseline_profile: Path,
+) -> _ExtractionStats:
+    """Fetches remote profile while transferring only changed/new session trees."""
+
+    logger.info("Using incremental remote fetch against baseline: %s", baseline_profile)
+    base_stats = _fetch_remote_tar_with_command(
+        remote_host=remote_host,
+        command=_build_remote_tar_command(
+            remote_profile_path=remote_profile_path,
+            include_vm_bundles=include_vm_bundles,
+            exclude_local_agent_mode_sessions=True,
+        ),
+        target_root=target_root,
+    )
+    remote_hashes = _list_remote_session_json_hashes(remote_host=remote_host, remote_profile_path=remote_profile_path)
+    transfer_paths = _paths_to_transfer_for_remote_sessions(remote_hashes=remote_hashes, baseline_profile=baseline_profile)
+    logger.info(
+        "Incremental session diff: remote_sessions=%d transfer_paths=%d",
+        len(remote_hashes),
+        len(transfer_paths),
+    )
+    if not transfer_paths:
+        return base_stats
+    session_stats = _fetch_remote_tar_with_path_list(
+        remote_host=remote_host,
+        command=_build_remote_tar_from_path_list_command(remote_profile_path),
+        target_root=target_root,
+        relative_paths=transfer_paths,
+    )
+    return _merge_stats(base_stats, session_stats)
+
+
+def _merge_stats(first: _ExtractionStats, second: _ExtractionStats) -> _ExtractionStats:
+    """Combines two extraction stat objects."""
+
+    return _ExtractionStats(
+        members_seen=first.members_seen + second.members_seen,
+        directories=first.directories + second.directories,
+        regular_files=first.regular_files + second.regular_files,
+        symlinks=first.symlinks + second.symlinks,
+        hardlinks=first.hardlinks + second.hardlinks,
+        skipped_members=first.skipped_members + second.skipped_members,
+        extracted_bytes=first.extracted_bytes + second.extracted_bytes,
+    )
 
 
 @contextmanager
@@ -116,13 +167,25 @@ def _create_target_root(temp_parent: Optional[Path]) -> Path:
     return Path(mkdtemp(prefix="cowork-remote-profile-"))
 
 
-def _build_remote_tar_command(remote_profile_path: str, include_vm_bundles: bool) -> str:
+def _build_remote_tar_command(
+    remote_profile_path: str,
+    include_vm_bundles: bool,
+    exclude_local_agent_mode_sessions: bool = False,
+) -> str:
     """Builds a remote shell command that streams a tar archive to stdout."""
 
     profile_expr = _remote_path_expression(remote_profile_path)
-    tar_exclude = ""
+    excludes: list[str] = []
     if not include_vm_bundles:
-        tar_exclude = ' --exclude="$BASE_NAME/vm_bundles" --exclude="$BASE_NAME/vm_bundles/*"'
+        excludes.extend(['--exclude="$BASE_NAME/vm_bundles"', '--exclude="$BASE_NAME/vm_bundles/*"'])
+    if exclude_local_agent_mode_sessions:
+        excludes.extend(
+            [
+                '--exclude="$BASE_NAME/local-agent-mode-sessions"',
+                '--exclude="$BASE_NAME/local-agent-mode-sessions/*"',
+            ]
+        )
+    tar_exclude = f" {' '.join(excludes)}" if excludes else ""
     return (
         f"PROFILE_PATH={profile_expr}; "
         'if [ ! -d "$PROFILE_PATH" ]; then '
@@ -132,6 +195,42 @@ def _build_remote_tar_command(remote_profile_path: str, include_vm_bundles: bool
         'PARENT_DIR="$(dirname "$PROFILE_PATH")"; '
         'BASE_NAME="$(basename "$PROFILE_PATH")"; '
         f'tar -C "$PARENT_DIR" -cf -{tar_exclude} "$BASE_NAME"'
+    )
+
+
+def _build_remote_tar_from_path_list_command(remote_profile_path: str) -> str:
+    """Builds remote command to create tar stream from relative paths read from stdin."""
+
+    profile_expr = _remote_path_expression(remote_profile_path)
+    return (
+        f"PROFILE_PATH={profile_expr}; "
+        'if [ ! -d "$PROFILE_PATH" ]; then '
+        'echo "Remote profile directory does not exist: $PROFILE_PATH" 1>&2; '
+        "exit 3; "
+        "fi; "
+        'cd "$PROFILE_PATH"; '
+        "tar -cf - -T -"
+    )
+
+
+def _build_remote_session_hash_command(remote_profile_path: str) -> str:
+    """Builds remote command to list session JSON files and SHA-256 hashes."""
+
+    profile_expr = _remote_path_expression(remote_profile_path)
+    return (
+        f"PROFILE_PATH={profile_expr}; "
+        'if [ ! -d "$PROFILE_PATH" ]; then '
+        'echo "Remote profile directory does not exist: $PROFILE_PATH" 1>&2; '
+        "exit 3; "
+        "fi; "
+        'cd "$PROFILE_PATH"; '
+        'if [ ! -d "local-agent-mode-sessions" ]; then '
+        "exit 0; "
+        "fi; "
+        "find local-agent-mode-sessions -type f -name 'local_*.json' -print | "
+        'while IFS= read -r file; do hash="$(shasum -a 256 "$file" | awk \'{print $1}\')"; '
+        'printf "%s\\t%s\\n" "$file" "$hash"; '
+        "done"
     )
 
 
@@ -158,6 +257,114 @@ def _remote_profile_name(remote_profile_path: str) -> str:
         logger.error(message)
         raise ValueError(message)
     return profile_name
+
+
+def _fetch_remote_tar_with_command(remote_host: str, command: str, target_root: Path) -> _ExtractionStats:
+    """Runs remote tar command over SSH and extracts stream into target root."""
+
+    process = subprocess.Popen(["ssh", remote_host, command], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if process.stdout is None or process.stderr is None:
+        message = "Failed to open SSH pipes for profile transfer."
+        logger.error(message)
+        raise RuntimeError(message)
+    return _extract_remote_process_tar(process=process, target_root=target_root)
+
+
+def _fetch_remote_tar_with_path_list(
+    remote_host: str,
+    command: str,
+    target_root: Path,
+    relative_paths: Sequence[str],
+) -> _ExtractionStats:
+    """Runs remote tar-from-path-list command and extracts stream into target root."""
+
+    process = subprocess.Popen(
+        ["ssh", remote_host, command],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.stdin is None or process.stdout is None or process.stderr is None:
+        message = "Failed to open SSH pipes for path-list transfer."
+        logger.error(message)
+        raise RuntimeError(message)
+    payload = ("\n".join(relative_paths) + "\n").encode("utf-8")
+    process.stdin.write(payload)
+    process.stdin.close()
+    return _extract_remote_process_tar(process=process, target_root=target_root)
+
+
+def _extract_remote_process_tar(process: subprocess.Popen, target_root: Path) -> _ExtractionStats:
+    """Extracts tar stream from running SSH process and handles errors."""
+
+    try:
+        stats = _extract_tar_stream(process.stdout, target_root)
+    except (tarfile.TarError, OSError, ValueError) as error:
+        stderr_output = process.stderr.read().decode("utf-8", errors="replace")
+        process.kill()
+        process.wait()
+        message = f"Failed to extract remote profile stream: {stderr_output.strip() or str(error)}"
+        logger.error(message)
+        raise RuntimeError(message) from error
+    stderr_output = process.stderr.read().decode("utf-8", errors="replace")
+    return_code = process.wait()
+    if return_code != 0:
+        message = f"SSH transfer failed (exit {return_code}): {stderr_output.strip()}"
+        logger.error(message)
+        raise RuntimeError(message)
+    return stats
+
+
+def _list_remote_session_json_hashes(remote_host: str, remote_profile_path: str) -> Dict[str, str]:
+    """Returns map of remote session JSON relative paths to SHA-256 hashes."""
+
+    command = _build_remote_session_hash_command(remote_profile_path)
+    completed = subprocess.run(["ssh", remote_host, command], capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        message = f"Failed to list remote session hashes: {completed.stderr.strip()}"
+        logger.error(message)
+        raise RuntimeError(message)
+    remote_hashes: Dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t", maxsplit=1)
+        if len(parts) != 2:
+            logger.warning("Skipping malformed remote session hash line: %s", line)
+            continue
+        relative_path = parts[0].strip()
+        file_hash = parts[1].strip()
+        if not relative_path or not file_hash:
+            continue
+        remote_hashes[relative_path] = file_hash
+    return remote_hashes
+
+
+def _paths_to_transfer_for_remote_sessions(remote_hashes: Dict[str, str], baseline_profile: Path) -> list[str]:
+    """Builds list of remote session JSON/folder paths requiring transfer."""
+
+    transfer_paths: list[str] = []
+    for relative_json in sorted(remote_hashes):
+        if not relative_json.endswith(".json"):
+            continue
+        session_folder = relative_json[: -len(".json")]
+        local_json = baseline_profile / relative_json
+        if _should_transfer_remote_session_json(local_json=local_json, remote_hash=remote_hashes[relative_json]):
+            transfer_paths.append(relative_json)
+            transfer_paths.append(session_folder)
+    return transfer_paths
+
+
+def _should_transfer_remote_session_json(local_json: Path, remote_hash: str) -> bool:
+    """Returns true if remote session should be transferred relative to local baseline."""
+
+    if not local_json.exists():
+        return True
+    try:
+        local_hash = sha256_file(local_json)
+    except OSError:
+        return True
+    return local_hash != remote_hash
 
 
 def _extract_tar_stream(stream: BinaryIO, destination: Path) -> _ExtractionStats:

@@ -66,8 +66,9 @@ This mode:
 1. Uses local profile A default: `~/Library/Application Support/Claude`.
 2. Fetches remote profile B from SSH host at default path `~/Library/Application Support/Claude`.
 3. Writes merged output to a unique path in the system temp directory like `.../claude-cowork-merged-<timestamp>`.
-4. Excludes `vm_bundles` by default to avoid transferring/copying large VM images.
-5. Auto-exports browser state for both profiles and performs the same merge + validation flow.
+4. Uses your local profile as a baseline and only transfers remote session trees whose `local_*.json` hash differs (plus remote-only sessions).
+5. Excludes `vm_bundles` by default to avoid transferring/copying large VM images.
+6. Auto-exports browser state for both profiles and performs the same merge + validation flow.
 
 Note: SSH profile fetch now preserves safe symlink/hardlink tar entries (for example debug pointers like `.../debug/latest`).
 The fetch step also reports periodic progress (`members`, `files`, `bytes`) during long remote syncs.
