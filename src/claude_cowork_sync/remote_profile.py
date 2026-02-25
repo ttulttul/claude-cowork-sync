@@ -151,25 +151,51 @@ def _fetch_remote_profile_incremental(
     """Fetches remote profile while transferring only changed/new session trees."""
 
     logger.info("Using incremental remote fetch against baseline: %s", baseline_profile)
-    expected_base_members = _estimate_remote_member_count(
+    remote_name = _remote_profile_name(remote_profile_path)
+    incremental_target_root = target_root / remote_name
+    incremental_target_root.mkdir(parents=True, exist_ok=True)
+    remote_base_hashes = _list_remote_non_session_file_hashes(
         remote_host=remote_host,
         remote_profile_path=remote_profile_path,
         include_vm_bundles=include_vm_bundles,
         include_cache_dirs=include_cache_dirs,
-        exclude_local_agent_mode_sessions=True,
+        parallel_remote=parallel_remote,
     )
-    base_stats = _fetch_remote_tar_with_command(
-        remote_host=remote_host,
-        command=_build_remote_tar_command(
-            remote_profile_path=remote_profile_path,
-            include_vm_bundles=include_vm_bundles,
-            include_cache_dirs=include_cache_dirs,
-            exclude_local_agent_mode_sessions=True,
-        ),
-        target_root=target_root,
-        expected_total_members=expected_base_members,
-        progress_label="Remote fetch (base profile)",
+    base_diff_progress = TerminalProgress(
+        label="Base diff",
+        total=len(remote_base_hashes) if remote_base_hashes else None,
+        unit="files",
+        color="yellow",
     )
+    base_transfer_paths = _paths_to_transfer_for_remote_base(
+        remote_hashes=remote_base_hashes,
+        baseline_profile=baseline_profile,
+        progress=base_diff_progress,
+    )
+    base_diff_progress.finish(
+        completed=len(remote_base_hashes),
+        detail=f"transfer_paths={len(base_transfer_paths)}",
+        success=True,
+    )
+    logger.info(
+        "Incremental base diff: remote_files=%d transfer_paths=%d",
+        len(remote_base_hashes),
+        len(base_transfer_paths),
+    )
+    base_stats = _ExtractionStats()
+    if base_transfer_paths:
+        base_stats = _fetch_remote_tar_with_path_list(
+            remote_host=remote_host,
+            command=_build_remote_tar_from_path_list_command(remote_profile_path),
+            target_root=incremental_target_root,
+            relative_paths=base_transfer_paths,
+            expected_total_members=_estimate_remote_member_count_for_paths(
+                remote_host=remote_host,
+                remote_profile_path=remote_profile_path,
+                relative_paths=base_transfer_paths,
+            ),
+            progress_label="Remote fetch (base profile)",
+        )
     remote_hashes = _list_remote_session_json_hashes(
         remote_host=remote_host,
         remote_profile_path=remote_profile_path,
@@ -198,8 +224,6 @@ def _fetch_remote_profile_incremental(
     )
     if not transfer_paths:
         return base_stats
-    remote_name = _remote_profile_name(remote_profile_path)
-    incremental_target_root = target_root / remote_name
     session_stats = _fetch_remote_tar_with_path_list(
         remote_host=remote_host,
         command=_build_remote_tar_from_path_list_command(remote_profile_path),
@@ -461,6 +485,53 @@ def _build_remote_session_hash_command_with_parallel(remote_profile_path: str, p
     )
 
 
+def _build_remote_non_session_hash_command(
+    remote_profile_path: str,
+    include_vm_bundles: bool,
+    include_cache_dirs: bool,
+    parallel_remote: Optional[int],
+) -> str:
+    """Builds remote command to hash non-session regular files for incremental base transfer."""
+
+    profile_expr = _remote_path_expression(remote_profile_path)
+    if parallel_remote is None:
+        parallelism_block = (
+            'if command -v nproc >/dev/null 2>&1; then '
+            'PARALLELISM="$(nproc)"; '
+            'elif command -v sysctl >/dev/null 2>&1; then '
+            'PARALLELISM="$(sysctl -n hw.ncpu 2>/dev/null || echo 1)"; '
+            "else "
+            'PARALLELISM="1"; '
+            "fi; "
+        )
+    else:
+        parallelism_block = f"PARALLELISM={parallel_remote}; "
+    prune_paths = _build_prune_paths(
+        include_vm_bundles=include_vm_bundles,
+        include_cache_dirs=include_cache_dirs,
+        exclude_local_agent_mode_sessions=True,
+    )
+    if prune_paths:
+        prune_expr = " -o ".join([f"-path {shlex.quote(path)}" for path in prune_paths])
+        find_expr = f"find . \\( {prune_expr} \\) -prune -o -type f -print0"
+    else:
+        find_expr = "find . -type f -print0"
+    return (
+        f"PROFILE_PATH={profile_expr}; "
+        'if [ ! -d "$PROFILE_PATH" ]; then '
+        'echo "Remote profile directory does not exist: $PROFILE_PATH" 1>&2; '
+        "exit 3; "
+        "fi; "
+        f"{parallelism_block}"
+        'if [ "$PARALLELISM" -lt 1 ] 2>/dev/null; then PARALLELISM=1; fi; '
+        'cd "$PROFILE_PATH"; '
+        f"{find_expr} | "
+        'xargs -0 -n 1 -P "$PARALLELISM" -I {} sh -c '
+        '\'file="$1"; hash="$(shasum -a 256 "$file" | cut -d " " -f 1)"; '
+        'clean="${file#./}"; printf "%s\\t%s\\n" "$clean" "$hash"\' _ {}'
+    )
+
+
 def _build_remote_hash_xargs_pipeline(parallelism_expr: str) -> str:
     """Builds remote shell pipeline that hashes session JSON files in parallel."""
 
@@ -626,6 +697,46 @@ def _list_remote_session_json_hashes(
     return remote_hashes
 
 
+def _list_remote_non_session_file_hashes(
+    remote_host: str,
+    remote_profile_path: str,
+    include_vm_bundles: bool,
+    include_cache_dirs: bool,
+    parallel_remote: Optional[int],
+) -> Dict[str, str]:
+    """Returns map of remote non-session file paths to SHA-256 hashes."""
+
+    if parallel_remote is not None and parallel_remote < 1:
+        message = f"parallel_remote must be >= 1, got {parallel_remote}"
+        logger.error(message)
+        raise ValueError(message)
+    command = _build_remote_non_session_hash_command(
+        remote_profile_path=remote_profile_path,
+        include_vm_bundles=include_vm_bundles,
+        include_cache_dirs=include_cache_dirs,
+        parallel_remote=parallel_remote,
+    )
+    completed = subprocess.run(["ssh", remote_host, command], capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        message = f"Failed to list remote base-file hashes: {completed.stderr.strip()}"
+        logger.error(message)
+        raise RuntimeError(message)
+    remote_hashes: Dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t", maxsplit=1)
+        if len(parts) != 2:
+            logger.warning("Skipping malformed remote base hash line: %s", line)
+            continue
+        relative_path = parts[0].strip()
+        file_hash = parts[1].strip()
+        if not relative_path or not file_hash:
+            continue
+        remote_hashes[relative_path] = file_hash
+    return remote_hashes
+
+
 def _estimate_remote_member_count(
     remote_host: str,
     remote_profile_path: str,
@@ -731,13 +842,36 @@ def _paths_to_transfer_for_remote_sessions(
     return transfer_paths
 
 
+def _paths_to_transfer_for_remote_base(
+    remote_hashes: Dict[str, str],
+    baseline_profile: Path,
+    progress: Optional[TerminalProgress] = None,
+) -> list[str]:
+    """Builds list of non-session base file paths requiring transfer."""
+
+    transfer_paths: list[str] = []
+    for index, relative_path in enumerate(sorted(remote_hashes), start=1):
+        local_file = baseline_profile / relative_path
+        if _should_transfer_remote_file(local_file=local_file, remote_hash=remote_hashes[relative_path]):
+            transfer_paths.append(relative_path)
+        if progress is not None:
+            progress.update(completed=index, detail=f"transfer_paths={len(transfer_paths)}")
+    return transfer_paths
+
+
 def _should_transfer_remote_session_json(local_json: Path, remote_hash: str) -> bool:
     """Returns true if remote session should be transferred relative to local baseline."""
 
-    if not local_json.exists():
+    return _should_transfer_remote_file(local_file=local_json, remote_hash=remote_hash)
+
+
+def _should_transfer_remote_file(local_file: Path, remote_hash: str) -> bool:
+    """Returns true when remote file differs from local baseline file."""
+
+    if not local_file.exists():
         return True
     try:
-        local_hash = sha256_file(local_json)
+        local_hash = sha256_file(local_file)
     except OSError:
         return True
     return local_hash != remote_hash

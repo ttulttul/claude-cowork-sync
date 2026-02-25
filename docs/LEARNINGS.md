@@ -26,3 +26,4 @@
 - For `--merge-from`, safety improves by checking remote processes first and refusing to copy if case-sensitive `Claude` is running remotely; helper-host processes under `Contents/Helpers/...` should be ignored to avoid false positives.
 - Stage-level spinner output is important for perceived reliability: browser-state exports and base-profile copy can be long-running even when no deterministic totals are available.
 - Distinct remote fetch labels (base profile vs session delta) reduce ambiguity when incremental mode performs multiple fetch passes.
+- Back-to-back `--merge-from` runs should avoid re-copying unchanged base-profile files by hashing remote non-session files and transferring only paths whose content differs from the local baseline.

@@ -148,10 +148,11 @@ This mode:
 2. Fetches remote profile B from SSH host at default path `~/Library/Application Support/Claude`.
 3. Writes merged output to a unique path in the system temp directory like `.../claude-cowork-merged-<timestamp>`.
 4. Uses your local profile as a baseline and only transfers remote session trees whose `local_*.json` hash differs (plus remote-only sessions).
-5. Excludes remote `vm_bundles` and non-essential cache directories by default to reduce transfer size.
-6. Preserves local `vm_bundles` in the merged output so local VM runtime assets remain usable.
-7. Auto-exports browser state for both profiles and performs the same merge + validation flow.
-8. Verifies `Claude` is not running on the remote host before any profile transfer starts.
+5. Uses your local profile as a baseline for non-session files too, transferring only changed remote base files.
+6. Excludes remote `vm_bundles` and non-essential cache directories by default to reduce transfer size.
+7. Preserves local `vm_bundles` in the merged output so local VM runtime assets remain usable.
+8. Auto-exports browser state for both profiles and performs the same merge + validation flow.
+9. Verifies `Claude` is not running on the remote host before any profile transfer starts.
 
 To merge and immediately apply to your local live profile:
 
