@@ -2,6 +2,16 @@
 
 Offline tooling for merging two Claude Desktop profiles on macOS, with Cowork session filesystem data plus logical browser storage state.
 
+## Quick Start - Copy Claude Cowork state from a remote Mac
+
+The following command fetches the remote Claude Cowork state, merging it with Cowork on your local Mac, safely checking to make sure nothing on your local Mac is overwritten that should not be:
+
+```bash
+uv run cowork-merge merge \
+  --merge-from "user@remote-mac" \
+  --apply
+```
+
 ## What this solves
 
 - Safely merges `local-agent-mode-sessions` from two profile copies.
