@@ -97,7 +97,7 @@ def test_fetch_remote_profile_incremental_uses_baseline_session_diff(
     changed_local_json.write_text("old", encoding="utf-8")
 
     tar_base = _tar_bytes_for_paths({"Claude/Local Storage/leveldb/CURRENT": b"current"})
-    tar_sessions = _tar_bytes_for_paths({"Claude/local-agent-mode-sessions/u/o/local_new.json": b"new"})
+    tar_sessions = _tar_bytes_for_paths({"local-agent-mode-sessions/u/o/local_new.json": b"new"})
     popen_calls: list[dict[str, Any]] = []
     popen_processes: list[_FakePopen] = []
     popen_payloads = [tar_base, tar_sessions]
@@ -142,6 +142,7 @@ def test_fetch_remote_profile_incremental_uses_baseline_session_diff(
     assert "local-agent-mode-sessions/u/o/local_same.json" not in sent_paths
     assert "local-agent-mode-sessions/u/o/local_changed.json" in sent_paths
     assert "local-agent-mode-sessions/u/o/local_new.json" in sent_paths
+    assert (fetched / "local-agent-mode-sessions/u/o/local_new.json").exists()
 
 
 def test_paths_to_transfer_for_remote_sessions_detects_changed_and_missing(tmp_path: Path) -> None:

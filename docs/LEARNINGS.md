@@ -14,3 +14,4 @@
 - Playwright preflight should validate both Python package import and Chromium executable presence to catch the common “Executable doesn’t exist” failure mode early.
 - Remote fetch throughput improves substantially by baseline-aware session transfer: fetch non-session profile content once, then transfer only remote session trees whose `local_*.json` hash differs from local baseline (plus remote-only sessions).
 - Base profile cloning should use `shutil.copytree(..., symlinks=True)` because Claude session backup trees may contain dangling debug symlinks (`.claude/debug/latest`) that fail when dereferenced.
+- Incremental session tar streams are rooted at the profile directory (not `Claude/`), so extraction target must be `.../remote-profile/Claude` to keep `local-agent-mode-sessions` discoverable for source B.

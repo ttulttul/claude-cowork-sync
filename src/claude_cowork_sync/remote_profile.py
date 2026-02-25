@@ -116,10 +116,12 @@ def _fetch_remote_profile_incremental(
     )
     if not transfer_paths:
         return base_stats
+    remote_name = _remote_profile_name(remote_profile_path)
+    incremental_target_root = target_root / remote_name
     session_stats = _fetch_remote_tar_with_path_list(
         remote_host=remote_host,
         command=_build_remote_tar_from_path_list_command(remote_profile_path),
-        target_root=target_root,
+        target_root=incremental_target_root,
         relative_paths=transfer_paths,
     )
     return _merge_stats(base_stats, session_stats)
