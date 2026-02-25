@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Optional, Sequence, Tuple
 
 from .browser_storage import export_browser_state_with_playwright, import_browser_state_with_playwright, read_browser_state
 from .deploy import atomic_swap_profile
-from .merge_engine import merge_profiles
+from .merge_engine import MergeSummary, merge_profiles
 from .remote_profile import fetch_remote_profile
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,11 @@ def _add_merge_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         default=default_local_parallelism(),
         help="Maximum local parallelism for merge operations (reserved for future local parallel stages).",
     )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Import merged browser state and atomically deploy merged profile into --profile-a.",
+    )
     parser.add_argument("--force", action="store_true", help="Overwrite output profile if it exists.")
     parser.add_argument(
         "--include-sensitive-claude-credentials",
@@ -226,10 +232,14 @@ def _run_merge(args: argparse.Namespace) -> int:
             include_cache_dirs=args.include_cache_dirs,
             parallel_local=args.parallel_local,
         )
+        backup_profile = _apply_merged_profile_if_requested(args=args, summary=summary)
     result = {
         "outputProfile": str(summary.output_profile),
         "mergedSessionCount": summary.merged_session_count,
         "browserStateOutput": str(summary.browser_state_output) if summary.browser_state_output else None,
+        "applied": args.apply,
+        "liveProfile": str(args.profile_a) if args.apply else None,
+        "backupProfile": str(backup_profile) if backup_profile is not None else None,
         "validation": {
             "isValid": summary.validation.is_valid,
             "missingSessionFolders": summary.validation.missing_session_folders,
@@ -244,7 +254,7 @@ def _run_merge(args: argparse.Namespace) -> int:
 def _preflight_browser_state_requirements(args: argparse.Namespace) -> None:
     """Validates browser-state prerequisites before expensive merge steps."""
 
-    if not _requires_playwright_auto_export(args):
+    if not _requires_playwright_auto_export(args) and not _requires_playwright_apply(args):
         return
     _ensure_playwright_available_for_auto_export()
 
@@ -258,6 +268,12 @@ def _requires_playwright_auto_export(args: argparse.Namespace) -> bool:
     if any(item is not None for item in provided):
         return False
     return args.auto_export_browser_state or bool(args.merge_from)
+
+
+def _requires_playwright_apply(args: argparse.Namespace) -> bool:
+    """Returns true when merge flow applies browser-state import into merged output profile."""
+
+    return args.apply and not args.skip_browser_state
 
 
 def _ensure_playwright_available_for_auto_export() -> None:
@@ -370,6 +386,84 @@ def _resolve_browser_state_paths(
         headless=args.headless_browser_state,
     )
     return browser_state_a, browser_state_b, browser_state_output
+
+
+def _apply_merged_profile_if_requested(args: argparse.Namespace, summary: MergeSummary) -> Optional[Path]:
+    """Imports merged browser state and deploys merged profile when `--apply` is enabled."""
+
+    if not args.apply:
+        return None
+    _abort_if_claude_running()
+    if not args.skip_browser_state and summary.browser_state_output is not None:
+        logger.info("Importing merged browser state into output profile: %s", summary.output_profile)
+        merged_state = read_browser_state(summary.browser_state_output)
+        import_browser_state_with_playwright(
+            profile_dir=summary.output_profile,
+            browser_state=merged_state,
+            headless=args.headless_browser_state,
+            replace_local_storage=True,
+        )
+    backup_parent = args.profile_a.parent
+    logger.info(
+        "Applying merged profile to live profile %s with backups under %s",
+        args.profile_a,
+        backup_parent,
+    )
+    return atomic_swap_profile(
+        live_profile=args.profile_a,
+        merged_profile=summary.output_profile,
+        backup_parent=backup_parent,
+    )
+
+
+def _abort_if_claude_running() -> None:
+    """Raises when a case-sensitive `Claude` process is currently running."""
+
+    running = _find_processes_with_signature(signature="Claude")
+    if not running:
+        return
+    message = (
+        "Found running Claude process(es). Quit Claude and retry with --apply. "
+        f"Matches: {', '.join(running)}"
+    )
+    logger.error(message)
+    raise RuntimeError(message)
+
+
+def _find_processes_with_signature(signature: str) -> list[str]:
+    """Returns process descriptors whose command or args contain a case-sensitive signature."""
+
+    completed = subprocess.run(
+        ["ps", "-axo", "pid=,comm=,args="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        message = f"Failed to enumerate processes with ps: {completed.stderr.strip()}"
+        logger.error(message)
+        raise RuntimeError(message)
+    current_pid = os.getpid()
+    matches: list[str] = []
+    for raw_line in completed.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 2:
+            continue
+        pid_str = parts[0]
+        try:
+            pid = int(pid_str)
+        except ValueError:
+            continue
+        if pid == current_pid:
+            continue
+        comm = parts[1]
+        args = parts[2] if len(parts) > 2 else ""
+        if signature in comm or signature in args:
+            matches.append(f"{pid}:{comm}")
+    return matches
 
 
 def _run_export_browser_state(args: argparse.Namespace) -> int:

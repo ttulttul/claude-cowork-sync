@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import pytest
 
 from claude_cowork_sync import cli
+from claude_cowork_sync.models import BrowserStateExport
 from claude_cowork_sync.merge_engine import MergeSummary
 from claude_cowork_sync.models import ValidationResult
 
@@ -361,6 +363,232 @@ def test_validate_playwright_executable_path_accepts_existing_binary(tmp_path: P
     executable = tmp_path / "chrome"
     executable.write_text("", encoding="utf-8")
     cli._validate_playwright_executable_path(executable)
+
+
+def test_merge_apply_imports_browser_state_and_deploys(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Applies merged output by importing browser state and atomically swapping live profile."""
+
+    profile_a = _create_profile(tmp_path / "profile_a")
+    profile_b = _create_profile(tmp_path / "profile_b")
+    output_profile = _create_profile(tmp_path / "merged")
+    browser_state_output = tmp_path / "browser_state_merged.json"
+    browser_state_output.write_text("{}", encoding="utf-8")
+    backup_profile = tmp_path / "Claude.backup.test"
+    captured: dict[str, object] = {}
+
+    def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
+        return MergeSummary(
+            output_profile=output_profile,
+            merged_session_count=2,
+            browser_state_output=browser_state_output,
+            validation=ValidationResult([], [], []),
+        )
+
+    def _fake_abort_if_claude_running() -> None:
+        captured["checked_processes"] = True
+
+    def _fake_read_browser_state(path: Path) -> BrowserStateExport:
+        captured["browser_state_path"] = path
+        return BrowserStateExport(exportedAt=1, origin="https://claude.ai", localStorage={}, indexedDb={})
+
+    def _fake_import_browser_state_with_playwright(
+        profile_dir: Path,
+        browser_state: BrowserStateExport,
+        headless: bool,
+        replace_local_storage: bool,
+    ) -> None:
+        captured["import_profile_dir"] = profile_dir
+        captured["import_headless"] = headless
+        captured["replace_local_storage"] = replace_local_storage
+        captured["import_origin"] = browser_state.origin
+
+    def _fake_atomic_swap_profile(live_profile: Path, merged_profile: Path, backup_parent: Path) -> Path:
+        captured["live_profile"] = live_profile
+        captured["merged_profile"] = merged_profile
+        captured["backup_parent"] = backup_parent
+        return backup_profile
+
+    monkeypatch.setattr("claude_cowork_sync.cli.merge_profiles", _fake_merge_profiles)
+    monkeypatch.setattr("claude_cowork_sync.cli._abort_if_claude_running", _fake_abort_if_claude_running)
+    monkeypatch.setattr("claude_cowork_sync.cli.read_browser_state", _fake_read_browser_state)
+    monkeypatch.setattr(
+        "claude_cowork_sync.cli.import_browser_state_with_playwright",
+        _fake_import_browser_state_with_playwright,
+    )
+    monkeypatch.setattr("claude_cowork_sync.cli.atomic_swap_profile", _fake_atomic_swap_profile)
+    monkeypatch.setattr("claude_cowork_sync.cli._ensure_playwright_available_for_auto_export", lambda: None)
+
+    exit_code = cli.run(
+        [
+            "merge",
+            "--profile-a",
+            str(profile_a),
+            "--profile-b",
+            str(profile_b),
+            "--output-profile",
+            str(output_profile),
+            "--apply",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["checked_processes"] is True
+    assert captured["browser_state_path"] == browser_state_output
+    assert captured["import_profile_dir"] == output_profile
+    assert captured["import_headless"] is False
+    assert captured["replace_local_storage"] is True
+    assert captured["import_origin"] == "https://claude.ai"
+    assert captured["live_profile"] == profile_a
+    assert captured["merged_profile"] == output_profile
+    assert captured["backup_parent"] == profile_a.parent
+
+
+def test_merge_apply_with_skip_browser_state_deploys_without_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Skips browser-state import when --skip-browser-state is set, but still deploys."""
+
+    profile_a = _create_profile(tmp_path / "profile_a")
+    profile_b = _create_profile(tmp_path / "profile_b")
+    output_profile = _create_profile(tmp_path / "merged")
+    backup_profile = tmp_path / "Claude.backup.test"
+    captured: dict[str, object] = {}
+
+    def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
+        return MergeSummary(
+            output_profile=output_profile,
+            merged_session_count=1,
+            browser_state_output=None,
+            validation=ValidationResult([], [], []),
+        )
+
+    def _fake_abort_if_claude_running() -> None:
+        captured["checked_processes"] = True
+
+    def _fake_import_browser_state_with_playwright(
+        profile_dir: Path,
+        browser_state: BrowserStateExport,
+        headless: bool,
+        replace_local_storage: bool,
+    ) -> None:
+        captured["import_called"] = True
+
+    def _fake_atomic_swap_profile(live_profile: Path, merged_profile: Path, backup_parent: Path) -> Path:
+        captured["live_profile"] = live_profile
+        captured["merged_profile"] = merged_profile
+        captured["backup_parent"] = backup_parent
+        return backup_profile
+
+    monkeypatch.setattr("claude_cowork_sync.cli.merge_profiles", _fake_merge_profiles)
+    monkeypatch.setattr("claude_cowork_sync.cli._abort_if_claude_running", _fake_abort_if_claude_running)
+    monkeypatch.setattr(
+        "claude_cowork_sync.cli.import_browser_state_with_playwright",
+        _fake_import_browser_state_with_playwright,
+    )
+    monkeypatch.setattr("claude_cowork_sync.cli.atomic_swap_profile", _fake_atomic_swap_profile)
+
+    exit_code = cli.run(
+        [
+            "merge",
+            "--profile-a",
+            str(profile_a),
+            "--profile-b",
+            str(profile_b),
+            "--output-profile",
+            str(output_profile),
+            "--skip-browser-state",
+            "--apply",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["checked_processes"] is True
+    assert "import_called" not in captured
+    assert captured["live_profile"] == profile_a
+    assert captured["merged_profile"] == output_profile
+    assert captured["backup_parent"] == profile_a.parent
+
+
+def test_merge_apply_aborts_when_claude_running(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Raises and skips deployment when a running Claude process is detected."""
+
+    profile_a = _create_profile(tmp_path / "profile_a")
+    profile_b = _create_profile(tmp_path / "profile_b")
+    output_profile = _create_profile(tmp_path / "merged")
+    called: dict[str, bool] = {"deploy_called": False}
+
+    def _fake_merge_profiles(**kwargs: object) -> MergeSummary:
+        return MergeSummary(
+            output_profile=output_profile,
+            merged_session_count=1,
+            browser_state_output=None,
+            validation=ValidationResult([], [], []),
+        )
+
+    def _fake_abort_if_claude_running() -> None:
+        raise RuntimeError("Found running Claude process(es).")
+
+    def _fake_atomic_swap_profile(live_profile: Path, merged_profile: Path, backup_parent: Path) -> Path:
+        called["deploy_called"] = True
+        return backup_profile  # pragma: no cover
+
+    backup_profile = tmp_path / "Claude.backup.test"
+    monkeypatch.setattr("claude_cowork_sync.cli.merge_profiles", _fake_merge_profiles)
+    monkeypatch.setattr("claude_cowork_sync.cli._abort_if_claude_running", _fake_abort_if_claude_running)
+    monkeypatch.setattr("claude_cowork_sync.cli.atomic_swap_profile", _fake_atomic_swap_profile)
+
+    with pytest.raises(RuntimeError):
+        cli.run(
+            [
+                "merge",
+                "--profile-a",
+                str(profile_a),
+                "--profile-b",
+                str(profile_b),
+                "--output-profile",
+                str(output_profile),
+                "--skip-browser-state",
+                "--apply",
+            ]
+        )
+
+    assert called["deploy_called"] is False
+
+
+def test_find_processes_with_signature_is_case_sensitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matches uppercase `Claude` processes while ignoring lowercase `claude` entries."""
+
+    output = "\n".join(
+        [
+            "123 /Applications/Claude.app/Contents/MacOS/Claude /Applications/Claude.app/Contents/MacOS/Claude",
+            "124 /usr/local/bin/claude /usr/local/bin/claude session",
+            "125 /bin/zsh zsh -lc echo Claude-test",
+        ]
+    )
+
+    def _fake_run(
+        args: list[str],
+        capture_output: bool,
+        text: bool,
+        check: bool,
+    ) -> CompletedProcess[str]:
+        return CompletedProcess(args=args, returncode=0, stdout=output, stderr="")
+
+    monkeypatch.setattr("claude_cowork_sync.cli.subprocess.run", _fake_run)
+    monkeypatch.setattr("claude_cowork_sync.cli.os.getpid", lambda: 999999)
+
+    matches = cli._find_processes_with_signature("Claude")
+
+    assert "123:/Applications/Claude.app/Contents/MacOS/Claude" in matches
+    assert all("124:" not in match for match in matches)
+    assert any(match.startswith("125:") for match in matches)
 
 
 def _create_profile(path: Path) -> Path:

@@ -108,6 +108,9 @@ The tool performs a logical merge, not a raw file rsync.
 2. Run merge command (remote source can be fetched automatically over SSH).
 3. Validate output and atomically deploy.
 
+For a one-command apply flow, use `--apply` on `merge`. The tool will import merged browser state into the merged profile and atomically swap it into your local live profile path (`--profile-a`).
+Before applying, it performs a case-sensitive process check for `Claude` and aborts if Claude is still running.
+
 ## Commands
 
 ### Merge profiles
@@ -139,6 +142,14 @@ This mode:
 6. Preserves local `vm_bundles` in the merged output so local VM runtime assets remain usable.
 7. Auto-exports browser state for both profiles and performs the same merge + validation flow.
 
+To merge and immediately apply to your local live profile:
+
+```bash
+uv run cowork-merge merge \
+  --merge-from "user@remote-mac" \
+  --apply
+```
+
 Note: SSH profile fetch now preserves safe symlink/hardlink tar entries (for example debug pointers like `.../debug/latest`).
 The fetch step also reports periodic progress (`members`, `files`, `bytes`) during long remote syncs.
 Auto-export requires Playwright; if unavailable, merge now fails fast before remote transfer starts.
@@ -151,6 +162,8 @@ Options:
 - `--skip-indexeddb`: merge LocalStorage but skip IndexedDB.
 - `--base-source {a|b}`: base profile for unknown localStorage keys.
 - `--force`: overwrite existing output profile directory.
+- `--apply`: import merged browser state into merged output and atomically deploy it into `--profile-a`.
+  - Safety check: this aborts if any running process contains case-sensitive `Claude`; quit Claude first.
 - `--include-sensitive-claude-credentials`: allow copying `.claude/.credentials.json` from secondary side.
 - `--merge-from user@host`: fetch profile B over SSH instead of `--profile-b`.
 - `--remote-profile-path`: remote path to profile directory.
