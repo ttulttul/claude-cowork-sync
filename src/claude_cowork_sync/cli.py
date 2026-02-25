@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ from .merge_engine import MergeSummary, merge_profiles
 from .remote_profile import fetch_remote_profile
 
 logger = logging.getLogger(__name__)
+_CLAUDE_HELPER_PROCESS_PATTERN = re.compile(r"Contents/Helpers/.+")
 
 
 def default_local_profile_path() -> Path:
@@ -461,9 +463,18 @@ def _find_processes_with_signature(signature: str) -> list[str]:
             continue
         comm = parts[1]
         args = parts[2] if len(parts) > 2 else ""
+        if signature == "Claude" and _is_ignored_claude_helper_process(comm=comm, args=args):
+            logger.debug("Ignoring Claude helper process: pid=%s comm=%s", pid, comm)
+            continue
         if signature in comm or signature in args:
             matches.append(f"{pid}:{comm}")
     return matches
+
+
+def _is_ignored_claude_helper_process(comm: str, args: str) -> bool:
+    """Returns true for Claude helper process commands that should not block apply."""
+
+    return bool(_CLAUDE_HELPER_PROCESS_PATTERN.search(comm) or _CLAUDE_HELPER_PROCESS_PATTERN.search(args))
 
 
 def _run_export_browser_state(args: argparse.Namespace) -> int:

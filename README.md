@@ -164,6 +164,7 @@ Options:
 - `--force`: overwrite existing output profile directory.
 - `--apply`: import merged browser state into merged output and atomically deploy it into `--profile-a`.
   - Safety check: this aborts if any running process contains case-sensitive `Claude`; quit Claude first.
+  - The check ignores Claude helper-host processes under `Contents/Helpers/...` (for example browser extension native-host helpers).
 - `--include-sensitive-claude-credentials`: allow copying `.claude/.credentials.json` from secondary side.
 - `--merge-from user@host`: fetch profile B over SSH instead of `--profile-b`.
 - `--remote-profile-path`: remote path to profile directory.

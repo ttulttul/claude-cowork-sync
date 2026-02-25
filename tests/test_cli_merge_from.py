@@ -569,6 +569,7 @@ def test_find_processes_with_signature_is_case_sensitive(monkeypatch: pytest.Mon
         [
             "123 /Applications/Claude.app/Contents/MacOS/Claude /Applications/Claude.app/Contents/MacOS/Claude",
             "124 /usr/local/bin/claude /usr/local/bin/claude session",
+            "126 /Applications/Claude.app/Contents/Helpers/chrome-native-host /Applications/Claude.app/Contents/Helpers/chrome-native-host chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/",
             "125 /bin/zsh zsh -lc echo Claude-test",
         ]
     )
@@ -588,6 +589,7 @@ def test_find_processes_with_signature_is_case_sensitive(monkeypatch: pytest.Mon
 
     assert "123:/Applications/Claude.app/Contents/MacOS/Claude" in matches
     assert all("124:" not in match for match in matches)
+    assert all("126:" not in match for match in matches)
     assert any(match.startswith("125:") for match in matches)
 
 
