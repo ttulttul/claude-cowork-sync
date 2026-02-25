@@ -149,10 +149,15 @@ class TerminalProgress:
 
         label = _colorize(self.label, self.color, self._color_enabled)
         if self.total is not None and self.total > 0:
-            bar = self._progress_bar(completed=completed, total=self.total)
-            ratio = min(1.0, max(0.0, float(completed) / float(self.total)))
-            percent = int(ratio * 100)
-            body = f"{bar} {percent:3d}% {completed}/{self.total} {self.unit}"
+            if completed <= self.total:
+                bar = self._progress_bar(completed=completed, total=self.total)
+                ratio = min(1.0, max(0.0, float(completed) / float(self.total)))
+                percent = int(ratio * 100)
+                body = f"{bar} {percent:3d}% {completed}/{self.total} {self.unit}"
+            else:
+                spinner = _SPINNER_FRAMES[self._spinner_index % len(_SPINNER_FRAMES)]
+                self._spinner_index += 1
+                body = f"{spinner} {completed} {self.unit} (est {self.total})"
         else:
             spinner = _SPINNER_FRAMES[self._spinner_index % len(_SPINNER_FRAMES)]
             self._spinner_index += 1

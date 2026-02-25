@@ -22,3 +22,4 @@
 - Defaulting merge browser-state operations to headless mode avoids requiring a visible browser window in the common `--merge-from ... --apply` path while keeping an explicit opt-out via `--no-headless-browser-state`.
 - Setting the default log level to `WARNING` keeps routine output clean; progress should be rendered separately from logs using live terminal lines, with bars for known totals and single-line status updates for stream-style operations.
 - For remote tar streams, a quick metadata-only SSH pre-count (using `find` + prune rules) gives reliable-enough totals to render real progress bars during fetch without reading file contents up front.
+- On macOS remote hosts, setting `COPYFILE_DISABLE=1` for tar avoids synthesized `._*` metadata entries that can double apparent member counts and make pre-count-based progress bars overshoot.

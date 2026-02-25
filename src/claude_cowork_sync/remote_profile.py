@@ -281,7 +281,7 @@ def _build_remote_tar_command(
         "fi; "
         'PARENT_DIR="$(dirname "$PROFILE_PATH")"; '
         'BASE_NAME="$(basename "$PROFILE_PATH")"; '
-        f'tar -C "$PARENT_DIR" -cf -{tar_exclude} "$BASE_NAME"'
+        f'COPYFILE_DISABLE=1 tar -C "$PARENT_DIR" -cf -{tar_exclude} "$BASE_NAME"'
     )
 
 
@@ -296,7 +296,7 @@ def _build_remote_tar_from_path_list_command(remote_profile_path: str) -> str:
         "exit 3; "
         "fi; "
         'cd "$PROFILE_PATH"; '
-        "tar -cf - -T -"
+        "COPYFILE_DISABLE=1 tar -cf - -T -"
     )
 
 

@@ -198,6 +198,7 @@ def test_build_remote_tar_command_excludes_vm_bundles_by_default() -> None:
     )
     assert '--exclude="$BASE_NAME/vm_bundles"' in command
     assert '--exclude="$BASE_NAME/vm_bundles/*"' in command
+    assert "COPYFILE_DISABLE=1 tar" in command
 
 
 def test_build_remote_tar_command_can_include_vm_bundles() -> None:
@@ -209,6 +210,7 @@ def test_build_remote_tar_command_can_include_vm_bundles() -> None:
         include_cache_dirs=False,
     )
     assert "vm_bundles" not in command
+    assert "COPYFILE_DISABLE=1 tar" in command
 
 
 def test_build_remote_tar_command_excludes_caches_by_default() -> None:
