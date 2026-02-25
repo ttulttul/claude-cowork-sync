@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from .metadata_merge import merge_session_metadata
 from .models import SessionBinding, SessionMergeResult, SessionSourceRecord
+from .progress import TerminalProgress
 from .utils import conflict_path, ensure_parent, parse_int_timestamp, read_json_file, sha256_file, sha256_text, write_json_file
 
 logger = logging.getLogger(__name__)
@@ -56,20 +57,31 @@ def merge_session_trees(
     records_a = discover_session_records(profile_a, "a")
     records_b = discover_session_records(profile_b, "b")
     merged_results: Dict[str, SessionMergeResult] = {}
-    for session_id in sorted(set(records_a) | set(records_b)):
+    session_ids = sorted(set(records_a) | set(records_b))
+    progress = TerminalProgress(
+        label="Merging sessions",
+        total=len(session_ids) if session_ids else None,
+        unit="sessions",
+        color="green",
+    )
+    for index, session_id in enumerate(session_ids, start=1):
         record_a = records_a.get(session_id)
         record_b = records_b.get(session_id)
         if record_a and record_b:
             result = _merge_shared_session(record_a, record_b, output_profile, include_sensitive_claude_credentials)
             merged_results[session_id] = result
-            continue
-        if record_a:
+        elif record_a:
             result = _build_existing_result(output_profile, record_a)
             merged_results[session_id] = result
-            continue
-        if record_b:
+        elif record_b:
             result = _copy_session_from_secondary(record_b, output_profile, include_sensitive_claude_credentials)
             merged_results[session_id] = result
+        progress.update(completed=index, detail=f"merged={len(merged_results)}")
+    progress.finish(
+        completed=len(session_ids),
+        detail=f"merged={len(merged_results)}",
+        success=True,
+    )
     logger.info("Merged %d sessions into %s", len(merged_results), output_profile)
     return merged_results
 

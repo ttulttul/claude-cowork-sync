@@ -374,6 +374,15 @@ def test_merge_headless_browser_state_defaults_to_true() -> None:
     assert args.headless_browser_state is True
 
 
+def test_cli_log_level_defaults_to_warning() -> None:
+    """Defaults global CLI log level to WARNING."""
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["merge", "--profile-b", "/tmp/profile-b"])
+
+    assert args.log_level == "WARNING"
+
+
 def test_merge_headless_browser_state_can_be_disabled() -> None:
     """Allows disabling headless mode with explicit --no-headless-browser-state flag."""
 

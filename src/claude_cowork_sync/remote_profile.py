@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory, mkdtemp
 from time import monotonic
 from typing import BinaryIO, Dict, Iterator, Optional, Sequence
 
+from .progress import TerminalProgress
 from .utils import sha256_file
 
 logger = logging.getLogger(__name__)
@@ -142,7 +143,22 @@ def _fetch_remote_profile_incremental(
         remote_profile_path=remote_profile_path,
         parallel_remote=parallel_remote,
     )
-    transfer_paths = _paths_to_transfer_for_remote_sessions(remote_hashes=remote_hashes, baseline_profile=baseline_profile)
+    diff_progress = TerminalProgress(
+        label="Session diff",
+        total=len(remote_hashes) if remote_hashes else None,
+        unit="sessions",
+        color="magenta",
+    )
+    transfer_paths = _paths_to_transfer_for_remote_sessions(
+        remote_hashes=remote_hashes,
+        baseline_profile=baseline_profile,
+        progress=diff_progress,
+    )
+    diff_progress.finish(
+        completed=len(remote_hashes),
+        detail=f"transfer_paths={len(transfer_paths)}",
+        success=True,
+    )
     logger.info(
         "Incremental session diff: remote_sessions=%d transfer_paths=%d",
         len(remote_hashes),
@@ -372,21 +388,33 @@ def _fetch_remote_tar_with_path_list(
 def _extract_remote_process_tar(process: subprocess.Popen, target_root: Path) -> _ExtractionStats:
     """Extracts tar stream from running SSH process and handles errors."""
 
+    progress = TerminalProgress(label="Remote fetch", total=None, unit="members", color="cyan")
     try:
-        stats = _extract_tar_stream(process.stdout, target_root)
+        stats = _extract_tar_stream(process.stdout, target_root, progress=progress)
     except (tarfile.TarError, OSError, ValueError) as error:
         stderr_output = process.stderr.read().decode("utf-8", errors="replace")
         process.kill()
         process.wait()
+        progress.finish(completed=0, detail="failed", success=False)
         message = f"Failed to extract remote profile stream: {stderr_output.strip() or str(error)}"
         logger.error(message)
         raise RuntimeError(message) from error
     stderr_output = process.stderr.read().decode("utf-8", errors="replace")
     return_code = process.wait()
     if return_code != 0:
+        progress.finish(
+            completed=stats.members_seen,
+            detail=f"ssh_exit={return_code}",
+            success=False,
+        )
         message = f"SSH transfer failed (exit {return_code}): {stderr_output.strip()}"
         logger.error(message)
         raise RuntimeError(message)
+    progress.finish(
+        completed=stats.members_seen,
+        detail=_format_progress_detail(stats),
+        success=True,
+    )
     return stats
 
 
@@ -428,18 +456,26 @@ def _list_remote_session_json_hashes(
     return remote_hashes
 
 
-def _paths_to_transfer_for_remote_sessions(remote_hashes: Dict[str, str], baseline_profile: Path) -> list[str]:
+def _paths_to_transfer_for_remote_sessions(
+    remote_hashes: Dict[str, str],
+    baseline_profile: Path,
+    progress: Optional[TerminalProgress] = None,
+) -> list[str]:
     """Builds list of remote session JSON/folder paths requiring transfer."""
 
     transfer_paths: list[str] = []
-    for relative_json in sorted(remote_hashes):
+    for index, relative_json in enumerate(sorted(remote_hashes), start=1):
         if not relative_json.endswith(".json"):
+            if progress is not None:
+                progress.update(completed=index, detail="scanning remote sessions")
             continue
         session_folder = relative_json[: -len(".json")]
         local_json = baseline_profile / relative_json
         if _should_transfer_remote_session_json(local_json=local_json, remote_hash=remote_hashes[relative_json]):
             transfer_paths.append(relative_json)
             transfer_paths.append(session_folder)
+        if progress is not None:
+            progress.update(completed=index, detail=f"transfer_paths={len(transfer_paths)}")
     return transfer_paths
 
 
@@ -455,16 +491,28 @@ def _should_transfer_remote_session_json(local_json: Path, remote_hash: str) -> 
     return local_hash != remote_hash
 
 
-def _extract_tar_stream(stream: BinaryIO, destination: Path) -> _ExtractionStats:
+def _extract_tar_stream(
+    stream: BinaryIO,
+    destination: Path,
+    progress: Optional[TerminalProgress] = None,
+) -> _ExtractionStats:
     """Extracts a tar stream into destination while preventing path traversal."""
 
     destination.mkdir(parents=True, exist_ok=True)
     stats = _ExtractionStats()
     last_progress_log = monotonic()
+    last_progress_render = monotonic()
     with tarfile.open(fileobj=stream, mode="r|*") as archive:
         for member in archive:
             _extract_member(archive=archive, member=member, destination=destination, stats=stats)
             last_progress_log = _maybe_log_extraction_progress(stats=stats, last_log=last_progress_log)
+            last_progress_render = _maybe_render_extraction_progress(
+                stats=stats,
+                progress=progress,
+                last_render=last_progress_render,
+            )
+    if progress is not None:
+        progress.update(completed=stats.members_seen, detail=_format_progress_detail(stats), force=True)
     return stats
 
 
@@ -623,6 +671,37 @@ def _maybe_log_extraction_progress(stats: _ExtractionStats, last_log: float) -> 
         _format_bytes(stats.extracted_bytes),
     )
     return now
+
+
+def _maybe_render_extraction_progress(
+    stats: _ExtractionStats,
+    progress: Optional[TerminalProgress],
+    last_render: float,
+) -> float:
+    """Renders periodic extraction progress line and returns updated timestamp."""
+
+    if progress is None:
+        return last_render
+    now = monotonic()
+    should_render = (
+        stats.members_seen == 1
+        or stats.members_seen % _PROGRESS_MEMBER_INTERVAL == 0
+        or now - last_render >= _PROGRESS_TIME_INTERVAL_SECONDS
+    )
+    if not should_render:
+        return last_render
+    progress.update(completed=stats.members_seen, detail=_format_progress_detail(stats))
+    return now
+
+
+def _format_progress_detail(stats: _ExtractionStats) -> str:
+    """Formats extraction detail text for progress rendering."""
+
+    return (
+        f"files={stats.regular_files} "
+        f"links={stats.symlinks + stats.hardlinks} "
+        f"bytes={_format_bytes(stats.extracted_bytes)}"
+    )
 
 
 def _format_bytes(value: int) -> str:

@@ -151,7 +151,11 @@ uv run cowork-merge merge \
 ```
 
 Note: SSH profile fetch now preserves safe symlink/hardlink tar entries (for example debug pointers like `.../debug/latest`).
-The fetch step also reports periodic progress (`members`, `files`, `bytes`) during long remote syncs.
+Long-running stages now show live terminal progress by default:
+- Progress bars when total work is known (for example session merge/diff stages).
+- Single-line live updates when total work is unknown (for example tar stream extraction).
+- Colored output in interactive terminals.
+Default logs are now warning-and-higher to keep normal output focused on progress.
 Auto-export requires Playwright; if unavailable, merge now fails fast before remote transfer starts.
 The same preflight also checks that Playwright Chromium binaries are installed before transfer starts.
 Base-profile copy now preserves symlinks (including dangling debug links) to avoid copy failures in `.claude/debug/latest`.
@@ -161,6 +165,8 @@ Options:
 - `--skip-browser-state`: merge filesystem sessions only.
 - `--skip-indexeddb`: merge LocalStorage but skip IndexedDB.
 - `--base-source {a|b}`: base profile for unknown localStorage keys.
+- `--log-level {DEBUG|INFO|WARNING|ERROR}`: CLI log verbosity.
+  - Default is `WARNING`.
 - `--force`: overwrite existing output profile directory.
 - `--apply`: import merged browser state into merged output and atomically deploy it into `--profile-a`.
   - Safety check: this aborts if any running process contains case-sensitive `Claude`; quit Claude first.
@@ -184,6 +190,8 @@ Options:
 - `--auto-export-browser-state`: export browser state JSONs automatically when not provided.
 - `--headless-browser-state` / `--no-headless-browser-state`: control headless Playwright mode for auto-export/import.
   - Default is headless mode enabled.
+
+Progress rendering can be disabled with environment variable `COWORK_MERGE_PROGRESS=0`.
 
 If Playwright is missing and you want browser-state merge:
 

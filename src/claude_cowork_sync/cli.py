@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Builds the CLI argument parser."""
 
     parser = argparse.ArgumentParser(description="Offline Claude Cowork profile merge tool.")
-    parser.add_argument("--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING, ERROR).")
+    parser.add_argument("--log-level", default="WARNING", help="Logging level (DEBUG, INFO, WARNING, ERROR).")
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_merge_parser(subparsers)
     _add_export_parser(subparsers)
@@ -181,7 +181,7 @@ def _add_deploy_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 def _configure_logging(level_name: str) -> None:
     """Configures root logging for CLI commands."""
 
-    level = getattr(logging, level_name.upper(), logging.INFO)
+    level = getattr(logging, level_name.upper(), logging.WARNING)
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
