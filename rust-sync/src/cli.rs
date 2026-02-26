@@ -97,6 +97,12 @@ struct MergeArgs {
     include_vm_bundles: bool,
     #[arg(long = "include-cache-dirs", action = ArgAction::SetTrue)]
     include_cache_dirs: bool,
+    #[arg(
+        long = "parallel-remote",
+        value_parser = parse_positive_usize,
+        help = "Maximum remote parallelism for session hashing (default: remote CPU core count)."
+    )]
+    parallel_remote: Option<usize>,
     #[arg(long = "apply", action = ArgAction::SetTrue)]
     apply: bool,
     #[arg(long = "force", action = ArgAction::SetTrue)]
@@ -210,7 +216,7 @@ fn run_merge(args: MergeArgs) -> Result<()> {
         .unwrap_or_else(default_output_profile_path);
 
     let mut remote_tempdir: Option<TempDir> = None;
-    let profile_b = resolve_profile_b(&args, &mut remote_tempdir)?;
+    let profile_b = resolve_profile_b(&args, &profile_a, &mut remote_tempdir)?;
 
     let mut browser_state_tempdir: Option<TempDir> = None;
     let (browser_state_a, browser_state_b, browser_state_output) =
@@ -381,7 +387,11 @@ fn resolved_headless_browser_state(args: &MergeArgs) -> bool {
     true
 }
 
-fn resolve_profile_b(args: &MergeArgs, remote_tempdir: &mut Option<TempDir>) -> Result<PathBuf> {
+fn resolve_profile_b(
+    args: &MergeArgs,
+    profile_a: &Path,
+    remote_tempdir: &mut Option<TempDir>,
+) -> Result<PathBuf> {
     if args.profile_b.is_some() && args.merge_from.is_some() {
         error!("Use either --profile-b or --merge-from, not both.");
         bail!("Use either --profile-b or --merge-from, not both.");
@@ -395,7 +405,9 @@ fn resolve_profile_b(args: &MergeArgs, remote_tempdir: &mut Option<TempDir>) -> 
             &args.remote_profile_path,
             Some(tempdir.path()),
             args.include_vm_bundles,
+            Some(profile_a),
             args.include_cache_dirs,
+            args.parallel_remote,
         )?;
         *remote_tempdir = Some(tempdir);
         return Ok(fetched);
@@ -615,10 +627,20 @@ fn default_output_profile_path() -> PathBuf {
     std::env::temp_dir().join(format!("claude-cowork-merged-{timestamp}"))
 }
 
+fn parse_positive_usize(raw: &str) -> std::result::Result<usize, String> {
+    let parsed = raw
+        .parse::<usize>()
+        .map_err(|_| format!("invalid positive integer value: {raw}"))?;
+    if parsed == 0 {
+        return Err("value must be >= 1".to_string());
+    }
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        requires_playwright_apply, requires_playwright_auto_export,
+        parse_positive_usize, requires_playwright_apply, requires_playwright_auto_export,
         resolved_headless_browser_state, MergeArgs,
     };
 
@@ -670,6 +692,16 @@ mod tests {
         assert!(!resolved_headless_browser_state(&no_headless));
     }
 
+    #[test]
+    fn parse_positive_usize_accepts_positive_values() {
+        assert_eq!(parse_positive_usize("7").expect("should parse"), 7);
+    }
+
+    #[test]
+    fn parse_positive_usize_rejects_zero() {
+        assert!(parse_positive_usize("0").is_err());
+    }
+
     fn base_merge_args() -> MergeArgs {
         MergeArgs {
             profile_a: None,
@@ -688,6 +720,7 @@ mod tests {
             skip_indexeddb: false,
             include_vm_bundles: false,
             include_cache_dirs: false,
+            parallel_remote: None,
             apply: false,
             force: false,
             include_sensitive_claude_credentials: false,

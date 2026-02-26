@@ -83,6 +83,8 @@ Rust browser-state behavior:
 - Install Playwright Chromium for Rust CLI usage:
   - `npx playwright@1.56.1 install chromium`
 - Rust CLI now shows live terminal progress (spinners/bars) for merge stages, remote fetch streaming, and browser import/export when output is a TTY.
+- Rust `merge --merge-from` uses local profile A as an incremental baseline and transfers only changed remote non-session files plus changed/new remote session trees.
+- Rust `merge` supports `--parallel-remote <N>` to control remote hash parallelism during incremental transfer planning.
 
 ## Swift GUI app (macOS)
 
@@ -254,6 +256,7 @@ Options:
 - `--skip-browser-state`: merge filesystem sessions only.
 - `--skip-indexeddb`: merge LocalStorage but skip IndexedDB.
 - `--base-source {a|b}`: base profile for unknown localStorage keys.
+- `--parallel-remote <N>`: cap remote parallelism used for incremental remote hash scans.
 - `--log-level {DEBUG|INFO|WARNING|ERROR}`: CLI log verbosity.
   - Default is `WARNING`.
 - `--force`: overwrite existing output profile directory.

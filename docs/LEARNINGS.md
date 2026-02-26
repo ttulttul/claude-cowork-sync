@@ -48,3 +48,4 @@
 - Rust can merge logical browser-state JSON exports with parity for `cowork-read-state`, session binding hydration, draft key timestamp precedence, and IndexedDB timestamp conflict resolution without touching Chromium LevelDB internals.
 - For full Rust ownership of browser-state workflows, using `playwright-rs` directly allows native export/import and `merge --auto-export-browser-state --apply` behavior without depending on the Python CLI implementation.
 - A lightweight in-place terminal renderer in Rust (spinners for unknown totals, bars for known totals, and byte counters for stream copy) gives Python-parity UX without extra UI dependencies, and can share the same `COWORK_MERGE_PROGRESS` env toggle.
+- Rust incremental remote fetch only activates when the CLI passes local `profile_a` as the baseline into remote-fetch planning; otherwise behavior silently falls back to full-profile SSH copy every run.
