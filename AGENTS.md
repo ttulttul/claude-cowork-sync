@@ -1,28 +1,41 @@
 ## Dev environment tips
-- Use uv for Python package management and manage this project as a uv project.
-- The `rg` command is installed; use it for quick searching.
-- This is a MacOS environment.
-- The git server we use is Bitbucket.
-- We're using a "monorepo" approach and avoiding PRs. Push to main upstream. There is only one developer on this project.
-- When you make a big discovery or change, note this in docs/LEARNINGS.md, even if user does not ask you to.
-- Update README.md with each major commit.
-- You can find the ComfyUI source code in ~/git/ComfyUI.
+- Primary implementation is Rust at repo root (`Cargo.toml`, `src/`).
+- Legacy Python/Swift stack lives under `python/` and is deprecated.
+- Use `rg` for fast search.
+- This is a macOS environment.
+- Git remote is Bitbucket.
+- Use a direct-to-main workflow (no PR process in this repo).
+- Record significant discoveries in `docs/LEARNINGS.md`.
+- Update `README.md` for major user-visible behavior changes.
 
-## Dev rules
-- Use Python logging liberally to insert judicious debug, info, warning, and error messages in the code.
-- Import logging into each module and set logger = logging.getLogger(__name__). Then use logger for logging in that module.
-- In most cases where an error message is called for, you should raise an appropriate exception after logging the error.
-- Let exceptions bubble up to the caller unless there is a logical way to handle the exception within the current scope.
-- Unless there is no more specific alternative, never catch the base `Exception` class. Always catch the most specific exception you can.
-- Commit every change you make and ask the user to push changes when a significant batch of changes has been made.
-- Use Python type hints, data classes, Pydantic models, and other strong typing features everywhere.
-- Never write a function that has no typing on parameters.
-- Write a documentation string for every function and every class.
-- Keep functions short and modular. If a function grows longer than 50 rows or so, break it into separate functions that you can compose in a sequence.
-- Take the time to keep your code clean, tidy, and readable. Comments should not be required if code is written in a modular, readable manner.
+## Rust development best practices
+- Keep APIs strongly typed and explicit; prefer domain structs/enums over loose maps.
+- Prefer `Result<T, E>`-based error propagation with context (`anyhow::Context`) instead of panics.
+- Avoid `unwrap`/`expect` in production paths; only use them in tests or truly impossible states.
+- Keep functions small and composable; split long functions into focused helpers.
+- Write clear doc comments on public types/functions and non-obvious behavior.
+- Prefer immutable bindings by default; minimize mutable shared state.
+- Use structured logging (`log` crate) at appropriate levels (`debug`, `info`, `warn`, `error`).
+- Keep I/O paths deterministic and idempotent where practical (safe reruns matter for sync tools).
+- For concurrency, use bounded parallelism and deterministic output behavior.
+- When optimizing, measure first and preserve correctness invariants.
+
+## Style and quality
+- Format with `cargo fmt`.
+- Keep Clippy warnings low; avoid lint suppressions unless justified.
+- Prefer standard library and existing crate patterns already used in this codebase.
+- Keep comments high-signal; explain why, not what.
 
 ## Testing instructions
-- Add or update tests for the code you change, even if nobody asked.
-- Use pytest and create a harness so the user can just type "uv pytest".
-- Always run the full test suite before every commit. Never commit if the test suite fails to pass.
+- Add or update tests for any behavior change.
+- Run Rust tests before every commit:
+  - `cargo test`
+- When changes affect legacy integration surfaces, also run:
+  - `uv run --project python pytest`
+  - `swift test --package-path python/swift-gui`
+- Never commit with failing tests.
 
+## Commit discipline
+- Commit each meaningful change.
+- Use concise, descriptive commit messages.
+- After significant batches, ask the user to push `main` upstream.
