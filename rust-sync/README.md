@@ -42,7 +42,33 @@ cargo run -- merge \
   --browser-state-output "/path/to/browser_state_merged.json"
 ```
 
-## Current limitations
+Auto-export browser state with Playwright during merge:
 
-- Rust mode does not currently run Playwright browser-state export/import.
-- `--apply` currently supports filesystem-only deployment (`--skip-browser-state`).
+```bash
+cargo run -- merge \
+  --merge-from "user@remote-mac" \
+  --auto-export-browser-state \
+  --apply
+```
+
+Direct Playwright bridge commands:
+
+```bash
+cargo run -- export-browser-state \
+  --profile "$HOME/Library/Application Support/Claude" \
+  --output "/tmp/browser_state.json" \
+  --origin "https://claude.ai" \
+  --headless
+```
+
+```bash
+cargo run -- import-browser-state \
+  --profile "$HOME/Library/Application Support/Claude" \
+  --input "/tmp/browser_state.json" \
+  --headless \
+  --replace-local-storage
+```
+
+Notes:
+- The Rust Playwright integration uses `uv run cowork-merge ...` under the hood for browser export/import.
+- `--no-headless-browser-state` disables headless mode for merge auto-export/apply import.

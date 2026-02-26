@@ -61,6 +61,8 @@ The repository now includes a Rust CLI implementation at `rust-sync/`.
 
 Current Rust command coverage:
 - `merge`
+- `export-browser-state`
+- `import-browser-state`
 - `deploy`
 
 Rust quick start (filesystem sync path):
@@ -73,14 +75,11 @@ cargo run --manifest-path rust-sync/Cargo.toml -- merge \
 ```
 
 Rust browser-state behavior:
-- Logical browser-state merge is supported when you provide all three explicit paths:
-  - `--browser-state-a`
-  - `--browser-state-b`
-  - `--browser-state-output`
-- Rust mode does not yet auto-export/import browser state with Playwright.
-- Rust `--apply` currently supports filesystem-only deploy (`--skip-browser-state`).
-
-If you need one-command browser-state auto-export/import (`--auto-export-browser-state` + browser import on apply), continue using the Python CLI for now.
+- Supports Playwright export/import through the existing Python Playwright runtime via `uv`.
+- Supports automatic Playwright export during merge:
+  - `--auto-export-browser-state` (also auto-enabled for `--merge-from` when browser-state paths are not provided)
+- Supports Playwright import during `merge --apply` when browser-state merge is enabled.
+- Headless browser-state mode is enabled by default and can be disabled with `--no-headless-browser-state`.
 
 ## Swift GUI app (macOS)
 

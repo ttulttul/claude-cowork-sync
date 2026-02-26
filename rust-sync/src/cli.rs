@@ -12,6 +12,10 @@ use tempfile::TempDir;
 
 use crate::deploy::atomic_swap_profile;
 use crate::merge_engine::{merge_profiles, MergeOptions, MergeSummary};
+use crate::playwright_bridge::{
+    ensure_playwright_available, export_browser_state_with_playwright,
+    import_browser_state_with_playwright,
+};
 use crate::remote_profile::fetch_remote_profile;
 
 #[derive(Debug, Parser)]
@@ -34,6 +38,10 @@ struct Cli {
 enum Commands {
     #[command(about = "Merge two profile directories into one output profile.")]
     Merge(MergeArgs),
+    #[command(about = "Export logical browser storage via Playwright bridge.")]
+    ExportBrowserState(ExportBrowserStateArgs),
+    #[command(about = "Import logical browser state via Playwright bridge.")]
+    ImportBrowserState(ImportBrowserStateArgs),
     #[command(about = "Atomically swap merged profile into live path.")]
     Deploy(DeployArgs),
 }
@@ -60,6 +68,24 @@ struct MergeArgs {
     browser_state_b: Option<PathBuf>,
     #[arg(long = "browser-state-output")]
     browser_state_output: Option<PathBuf>,
+    #[arg(
+        long = "auto-export-browser-state",
+        action = ArgAction::SetTrue,
+        help = "Auto-export browser state for both profiles when browser state files are not provided."
+    )]
+    auto_export_browser_state: bool,
+    #[arg(
+        long = "headless-browser-state",
+        action = ArgAction::SetTrue,
+        help = "Run browser-state export/import in headless mode (default: enabled)."
+    )]
+    headless_browser_state: bool,
+    #[arg(
+        long = "no-headless-browser-state",
+        action = ArgAction::SetTrue,
+        help = "Disable headless mode for browser-state export/import."
+    )]
+    no_headless_browser_state: bool,
     #[arg(long = "base-source", default_value = "a", value_parser = ["a", "b"])]
     base_source: String,
     #[arg(long = "skip-browser-state", action = ArgAction::SetTrue)]
@@ -76,6 +102,30 @@ struct MergeArgs {
     force: bool,
     #[arg(long = "include-sensitive-claude-credentials", action = ArgAction::SetTrue)]
     include_sensitive_claude_credentials: bool,
+}
+
+#[derive(Debug, clap::Args)]
+struct ExportBrowserStateArgs {
+    #[arg(long = "profile")]
+    profile: PathBuf,
+    #[arg(long = "output")]
+    output: PathBuf,
+    #[arg(long = "origin", default_value = "https://claude.ai")]
+    origin: String,
+    #[arg(long = "headless", action = ArgAction::SetTrue)]
+    headless: bool,
+}
+
+#[derive(Debug, clap::Args)]
+struct ImportBrowserStateArgs {
+    #[arg(long = "profile")]
+    profile: PathBuf,
+    #[arg(long = "input")]
+    input: PathBuf,
+    #[arg(long = "headless", action = ArgAction::SetTrue)]
+    headless: bool,
+    #[arg(long = "replace-local-storage", action = ArgAction::SetTrue)]
+    replace_local_storage: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -126,6 +176,8 @@ where
 
     match cli.command {
         Commands::Merge(args) => run_merge(args),
+        Commands::ExportBrowserState(args) => run_export_browser_state(args),
+        Commands::ImportBrowserState(args) => run_import_browser_state(args),
         Commands::Deploy(args) => run_deploy(args),
     }
 }
@@ -145,6 +197,8 @@ fn configure_logging(level_name: &str) {
 }
 
 fn run_merge(args: MergeArgs) -> Result<()> {
+    preflight_browser_state_requirements(&args)?;
+
     let profile_a = args
         .profile_a
         .clone()
@@ -157,8 +211,9 @@ fn run_merge(args: MergeArgs) -> Result<()> {
     let mut remote_tempdir: Option<TempDir> = None;
     let profile_b = resolve_profile_b(&args, &mut remote_tempdir)?;
 
+    let mut browser_state_tempdir: Option<TempDir> = None;
     let (browser_state_a, browser_state_b, browser_state_output) =
-        resolve_browser_state_paths(&args)?;
+        resolve_browser_state_paths(&args, &profile_a, &profile_b, &mut browser_state_tempdir)?;
 
     let options = MergeOptions {
         profile_a: profile_a.clone(),
@@ -177,7 +232,12 @@ fn run_merge(args: MergeArgs) -> Result<()> {
     };
 
     let summary = merge_profiles(&options)?;
-    let backup_profile = apply_merged_profile_if_requested(&args, &summary, &profile_a)?;
+    let backup_profile = apply_merged_profile_if_requested(
+        &args,
+        &summary,
+        &profile_a,
+        resolved_headless_browser_state(&args),
+    )?;
 
     let payload = MergeResultPayload {
         output_profile: summary.output_profile.display().to_string(),
@@ -212,6 +272,21 @@ fn run_merge(args: MergeArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_export_browser_state(args: ExportBrowserStateArgs) -> Result<()> {
+    ensure_playwright_available()?;
+    export_browser_state_with_playwright(&args.profile, &args.output, &args.origin, args.headless)
+}
+
+fn run_import_browser_state(args: ImportBrowserStateArgs) -> Result<()> {
+    ensure_playwright_available()?;
+    import_browser_state_with_playwright(
+        &args.profile,
+        &args.input,
+        args.headless,
+        args.replace_local_storage,
+    )
+}
+
 fn run_deploy(args: DeployArgs) -> Result<()> {
     let backup = atomic_swap_profile(
         &args.live_profile,
@@ -228,6 +303,40 @@ fn run_deploy(args: DeployArgs) -> Result<()> {
         serde_json::to_string_pretty(&payload).with_context(|| "Failed to render deploy result")?
     );
     Ok(())
+}
+
+fn preflight_browser_state_requirements(args: &MergeArgs) -> Result<()> {
+    if !requires_playwright_auto_export(args) && !requires_playwright_apply(args) {
+        return Ok(());
+    }
+    ensure_playwright_available()
+}
+
+fn requires_playwright_auto_export(args: &MergeArgs) -> bool {
+    if args.skip_browser_state {
+        return false;
+    }
+    let provided = [
+        args.browser_state_a.is_some(),
+        args.browser_state_b.is_some(),
+        args.browser_state_output.is_some(),
+    ];
+    if provided.iter().any(|item| *item) {
+        return false;
+    }
+    args.auto_export_browser_state || args.merge_from.is_some()
+}
+
+fn requires_playwright_apply(args: &MergeArgs) -> bool {
+    args.apply && !args.skip_browser_state
+}
+
+fn resolved_headless_browser_state(args: &MergeArgs) -> bool {
+    if args.no_headless_browser_state {
+        return false;
+    }
+    let _ = args.headless_browser_state;
+    true
 }
 
 fn resolve_profile_b(args: &MergeArgs, remote_tempdir: &mut Option<TempDir>) -> Result<PathBuf> {
@@ -260,6 +369,9 @@ fn resolve_profile_b(args: &MergeArgs, remote_tempdir: &mut Option<TempDir>) -> 
 
 fn resolve_browser_state_paths(
     args: &MergeArgs,
+    profile_a: &Path,
+    profile_b: &Path,
+    browser_state_tempdir: &mut Option<TempDir>,
 ) -> Result<(Option<PathBuf>, Option<PathBuf>, Option<PathBuf>)> {
     if args.skip_browser_state {
         return Ok((None, None, None));
@@ -285,27 +397,65 @@ fn resolve_browser_state_paths(
         );
     }
 
-    bail!(
-        "Rust merge currently requires explicit browser-state exports when browser merge is enabled. Provide --browser-state-a/--browser-state-b/--browser-state-output or use --skip-browser-state."
-    )
+    let should_auto_export = args.auto_export_browser_state || args.merge_from.is_some();
+    if !should_auto_export {
+        return Ok((None, None, None));
+    }
+
+    let tempdir =
+        tempfile::tempdir().with_context(|| "Failed to create browser-state temp directory")?;
+    let browser_state_a = tempdir.path().join("browser_state_a.json");
+    let browser_state_b = tempdir.path().join("browser_state_b.json");
+    let browser_state_output = tempdir.path().join("browser_state_merged.json");
+    let headless = resolved_headless_browser_state(args);
+
+    export_browser_state_with_playwright(
+        profile_a,
+        &browser_state_a,
+        "https://claude.ai",
+        headless,
+    )?;
+    export_browser_state_with_playwright(
+        profile_b,
+        &browser_state_b,
+        "https://claude.ai",
+        headless,
+    )?;
+
+    *browser_state_tempdir = Some(tempdir);
+    Ok((
+        Some(browser_state_a),
+        Some(browser_state_b),
+        Some(browser_state_output),
+    ))
 }
 
 fn apply_merged_profile_if_requested(
     args: &MergeArgs,
     summary: &MergeSummary,
     profile_a: &Path,
+    headless_browser_state: bool,
 ) -> Result<Option<PathBuf>> {
     if !args.apply {
         return Ok(None);
     }
 
-    if !args.skip_browser_state && summary.browser_state_output.is_some() {
-        bail!(
-            "--apply currently supports filesystem-only deploy in Rust mode. Re-run with --skip-browser-state and apply manually after browser-state import."
-        );
+    abort_if_claude_running()?;
+
+    if !args.skip_browser_state {
+        let Some(browser_state_output) = summary.browser_state_output.as_ref() else {
+            bail!(
+                "--apply requires merged browser-state output when browser-state merge is enabled"
+            );
+        };
+        import_browser_state_with_playwright(
+            &summary.output_profile,
+            browser_state_output,
+            headless_browser_state,
+            true,
+        )?;
     }
 
-    abort_if_claude_running()?;
     let backup_parent = profile_a
         .parent()
         .with_context(|| format!("Profile A path has no parent: {}", profile_a.display()))?;
@@ -394,4 +544,84 @@ fn default_local_profile_path() -> PathBuf {
 fn default_output_profile_path() -> PathBuf {
     let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     std::env::temp_dir().join(format!("claude-cowork-merged-{timestamp}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        requires_playwright_apply, requires_playwright_auto_export,
+        resolved_headless_browser_state, MergeArgs,
+    };
+
+    #[test]
+    fn requires_playwright_auto_export_for_merge_from_defaults() {
+        let mut args = base_merge_args();
+        args.merge_from = Some("user@host".to_string());
+
+        assert!(requires_playwright_auto_export(&args));
+    }
+
+    #[test]
+    fn requires_playwright_auto_export_false_when_paths_provided() {
+        let mut args = base_merge_args();
+        args.merge_from = Some("user@host".to_string());
+        args.browser_state_a = Some("/tmp/a.json".into());
+        args.browser_state_b = Some("/tmp/b.json".into());
+        args.browser_state_output = Some("/tmp/out.json".into());
+
+        assert!(!requires_playwright_auto_export(&args));
+    }
+
+    #[test]
+    fn requires_playwright_auto_export_false_when_skipped() {
+        let mut args = base_merge_args();
+        args.merge_from = Some("user@host".to_string());
+        args.skip_browser_state = true;
+
+        assert!(!requires_playwright_auto_export(&args));
+    }
+
+    #[test]
+    fn requires_playwright_apply_only_when_apply_and_not_skipped() {
+        let mut args = base_merge_args();
+        args.apply = true;
+        assert!(requires_playwright_apply(&args));
+
+        args.skip_browser_state = true;
+        assert!(!requires_playwright_apply(&args));
+    }
+
+    #[test]
+    fn resolved_headless_default_true_and_disable_flag_false() {
+        let args = base_merge_args();
+        assert!(resolved_headless_browser_state(&args));
+
+        let mut no_headless = base_merge_args();
+        no_headless.no_headless_browser_state = true;
+        assert!(!resolved_headless_browser_state(&no_headless));
+    }
+
+    fn base_merge_args() -> MergeArgs {
+        MergeArgs {
+            profile_a: None,
+            profile_b: None,
+            merge_from: None,
+            remote_profile_path: "Library/Application Support/Claude".to_string(),
+            output_profile: None,
+            browser_state_a: None,
+            browser_state_b: None,
+            browser_state_output: None,
+            auto_export_browser_state: false,
+            headless_browser_state: false,
+            no_headless_browser_state: false,
+            base_source: "a".to_string(),
+            skip_browser_state: false,
+            skip_indexeddb: false,
+            include_vm_bundles: false,
+            include_cache_dirs: false,
+            apply: false,
+            force: false,
+            include_sensitive_claude_credentials: false,
+        }
+    }
 }
