@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use which::which;
 
-use crate::progress::{format_bytes, ProgressColor, TerminalProgress};
+use crate::progress::{format_bytes, run_with_spinner_result, ProgressColor, TerminalProgress};
 use crate::utils::{sha1_file, sha256_file, sha256_text};
 
 #[derive(Debug, Default)]
@@ -366,11 +366,14 @@ fn ensure_remote_claude_not_running(remote_host: &str) -> Result<()> {
 }
 
 fn find_remote_processes_with_signature(remote_host: &str, signature: &str) -> Result<Vec<String>> {
-    let completed = Command::new("ssh")
-        .arg(remote_host)
-        .arg("ps -axo pid=,comm=,args=")
-        .output()
-        .with_context(|| format!("Failed to run process check via ssh for {remote_host}"))?;
+    let completed = run_remote_ssh_output_with_spinner(
+        remote_host,
+        "ps -axo pid=,comm=,args=",
+        "Remote preflight",
+        &format!("checking remote process list on {remote_host}"),
+        "checked",
+        ProgressColor::Blue,
+    )?;
 
     if !completed.status.success() {
         bail!(
@@ -600,11 +603,18 @@ fn list_remote_session_json_hashes(
         }
     };
 
-    let completed = Command::new("ssh")
-        .arg(remote_host)
-        .arg(command)
-        .output()
-        .with_context(|| "Failed to run remote session hash command")?;
+    let completed = run_remote_ssh_output_with_spinner(
+        remote_host,
+        &command,
+        "Remote session hash scan",
+        &format!(
+            "hashing remote session files (algo={}, remote_parallel={})",
+            hash_algorithm.as_name(),
+            format_remote_parallel(parallel_remote)
+        ),
+        "scan complete",
+        ProgressColor::Magenta,
+    )?;
 
     if !completed.status.success() {
         bail!(
@@ -638,11 +648,18 @@ fn list_remote_non_session_file_hashes(
         parallel_remote,
     )?;
 
-    let completed = Command::new("ssh")
-        .arg(remote_host)
-        .arg(command)
-        .output()
-        .with_context(|| "Failed to run remote base hash command")?;
+    let completed = run_remote_ssh_output_with_spinner(
+        remote_host,
+        &command,
+        "Remote base hash scan",
+        &format!(
+            "hashing remote non-session files (algo={}, remote_parallel={})",
+            hash_algorithm.as_name(),
+            format_remote_parallel(parallel_remote)
+        ),
+        "scan complete",
+        ProgressColor::Yellow,
+    )?;
 
     if !completed.status.success() {
         bail!(
@@ -674,6 +691,30 @@ fn parse_remote_hash_lines(stdout: &[u8]) -> Result<HashMap<String, String>> {
         hashes.insert(relative_path.to_string(), file_hash.to_string());
     }
     Ok(hashes)
+}
+
+fn run_remote_ssh_output_with_spinner(
+    remote_host: &str,
+    command: &str,
+    label: &str,
+    detail: &str,
+    success_detail: &str,
+    color: ProgressColor,
+) -> Result<std::process::Output> {
+    run_with_spinner_result(label, detail, color, success_detail, || {
+        Command::new("ssh")
+            .arg(remote_host)
+            .arg(command)
+            .output()
+            .with_context(|| format!("Failed to run ssh command for {remote_host}"))
+    })
+}
+
+fn format_remote_parallel(parallel_remote: Option<usize>) -> String {
+    match parallel_remote {
+        Some(value) => value.to_string(),
+        None => "auto(remote CPUs)".to_string(),
+    }
 }
 
 #[cfg(test)]
