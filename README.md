@@ -65,6 +65,7 @@ Inside the app:
 - Use progressive disclosure for advanced and manual browser-state options to keep routine merges focused.
 - Validate before run with inline error sections and use the command preview pane to verify exact CLI arguments.
 - Review the live execution log pane for streaming output and copy/share logs or command previews directly.
+- The layout adapts to window width: wide windows use a two-pane split, narrower windows stack configuration above execution.
 
 ## Expected profile paths (macOS)
 

@@ -5,235 +5,266 @@ struct ContentView: View {
     @ObservedObject var viewModel: MergeViewModel
 
     var body: some View {
-        HSplitView {
-            configurationPane
-                .frame(minWidth: 460, idealWidth: 560, maxWidth: 640)
-            executionPane
-                .frame(minWidth: 420, idealWidth: 520)
+        GeometryReader { proxy in
+            Group {
+                if proxy.size.width < 1_180 {
+                    VStack(spacing: 12) {
+                        configurationPane
+                            .frame(maxHeight: proxy.size.height * 0.56)
+                        executionPane
+                    }
+                } else {
+                    HSplitView {
+                        configurationPane
+                            .frame(minWidth: 460, maxWidth: .infinity)
+                        executionPane
+                            .frame(minWidth: 460, maxWidth: .infinity)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(16)
         }
-        .padding(16)
     }
 
     private var configurationPane: some View {
-        Form {
-            Section("Workflow Setup") {
-                inputRow(
-                    title: "Repository Root",
-                    hint: "Set this to the repo containing pyproject.toml so uv can resolve cowork-merge."
-                ) {
-                    pathInput(
-                        text: workspaceBinding(for: \.workspacePath),
-                        browseAction: {
-                            if let selectedPath = DirectoryPicker.pickDirectory() {
-                                viewModel.workspacePath = selectedPath
-                            }
-                        }
-                    )
-                }
-
-                inputRow(
-                    title: "Secondary Source Type",
-                    hint: "Choose local profile merge or remote host pull."
-                ) {
-                    Picker(
-                        "Source Type",
-                        selection: Binding(
-                            get: { viewModel.sourceMode },
-                            set: { viewModel.setSourceMode($0) }
-                        )
-                    ) {
-                        ForEach(MergeSourceMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                }
-            }
-
-            Section("Profiles") {
-                inputRow(
-                    title: "Profile A",
-                    hint: "Local live Claude profile to merge into."
-                ) {
-                    pathInput(
-                        text: formStringBinding(for: \.profileA),
-                        browseAction: {
-                            if let selectedPath = DirectoryPicker.pickDirectory() {
-                                viewModel.form.profileA = selectedPath
-                            }
-                        }
-                    )
-                }
-
-                if viewModel.sourceMode == .localProfileB {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionCard("Workflow Setup") {
                     inputRow(
-                        title: "Profile B",
-                        hint: "Secondary local profile directory."
+                        title: "Repository Root",
+                        hint: "Set this to the repo containing pyproject.toml so uv can resolve cowork-merge."
                     ) {
                         pathInput(
-                            text: formStringBinding(for: \.profileB),
+                            text: workspaceBinding(for: \.workspacePath),
                             browseAction: {
                                 if let selectedPath = DirectoryPicker.pickDirectory() {
-                                    viewModel.form.profileB = selectedPath
+                                    viewModel.workspacePath = selectedPath
                                 }
                             }
                         )
                     }
-                } else {
-                    inputRow(
-                        title: "Merge From",
-                        hint: "Remote host in user@host format."
-                    ) {
-                        TextField("user@remote-mac", text: formStringBinding(for: \.mergeFrom))
-                            .textFieldStyle(.roundedBorder)
-                    }
 
                     inputRow(
-                        title: "Remote Profile Path",
-                        hint: "Remote Claude profile path (absolute or relative to remote home)."
+                        title: "Secondary Source Type",
+                        hint: "Choose local profile merge or remote host pull."
                     ) {
-                        TextField(
-                            "Library/Application Support/Claude",
-                            text: formStringBinding(for: \.remoteProfilePath)
-                        )
-                        .textFieldStyle(.roundedBorder)
-                    }
-                }
-
-                inputRow(
-                    title: "Output Profile",
-                    hint: "Optional explicit output directory; leave empty for temp output path."
-                ) {
-                    pathInput(
-                        text: formStringBinding(for: \.outputProfile),
-                        browseAction: {
-                            if let selectedPath = DirectoryPicker.pickDirectory() {
-                                viewModel.form.outputProfile = selectedPath
+                        Picker(
+                            "Source Type",
+                            selection: Binding(
+                                get: { viewModel.sourceMode },
+                                set: { viewModel.setSourceMode($0) }
+                            )
+                        ) {
+                            ForEach(MergeSourceMode.allCases) { mode in
+                                Text(mode.rawValue).tag(mode)
                             }
-                        }
-                    )
-                }
-            }
-
-            Section("Browser State") {
-                Toggle("Skip browser-state merge", isOn: formBoolBinding(for: \.skipBrowserState))
-
-                if !viewModel.form.skipBrowserState {
-                    Toggle("Auto export browser state", isOn: formBoolBinding(for: \.autoExportBrowserState))
-                    Toggle("Run browser export/import in headless mode", isOn: formBoolBinding(for: \.headlessBrowserState))
-                    Toggle("Skip IndexedDB merge", isOn: formBoolBinding(for: \.skipIndexedDB))
-
-                    DisclosureGroup("Manual browser-state files", isExpanded: $viewModel.showManualBrowserState) {
-                        inputRow(
-                            title: "Browser State A JSON",
-                            hint: "Optional when auto export is enabled."
-                        ) {
-                            pathInput(
-                                text: formStringBinding(for: \.browserStateA),
-                                browseAction: {
-                                    if let selectedPath = DirectoryPicker.pickFile() {
-                                        viewModel.form.browserStateA = selectedPath
-                                    }
-                                }
-                            )
-                        }
-
-                        inputRow(
-                            title: "Browser State B JSON",
-                            hint: "Optional when auto export is enabled."
-                        ) {
-                            pathInput(
-                                text: formStringBinding(for: \.browserStateB),
-                                browseAction: {
-                                    if let selectedPath = DirectoryPicker.pickFile() {
-                                        viewModel.form.browserStateB = selectedPath
-                                    }
-                                }
-                            )
-                        }
-
-                        inputRow(
-                            title: "Browser State Output JSON",
-                            hint: "Destination path for merged browser-state output."
-                        ) {
-                            pathInput(
-                                text: formStringBinding(for: \.browserStateOutput),
-                                browseAction: {
-                                    if let selectedPath = DirectoryPicker.pickSaveFile(defaultName: "browser_state_merged.json") {
-                                        viewModel.form.browserStateOutput = selectedPath
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-
-            Section("Merge Behavior") {
-                inputRow(
-                    title: "Unknown Key Base",
-                    hint: "Keep unknown browser keys from source A or B."
-                ) {
-                    Picker("Base Source", selection: formStringBinding(for: \.baseSource)) {
-                        Text("A").tag("a")
-                        Text("B").tag("b")
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                }
-
-                Toggle("Apply merged profile after validation", isOn: formBoolBinding(for: \.apply))
-                Toggle("Force overwrite existing output profile", isOn: formBoolBinding(for: \.force))
-            }
-
-            Section {
-                DisclosureGroup("Advanced Options", isExpanded: $viewModel.showAdvancedOptions) {
-                    Toggle("Include remote vm_bundles", isOn: formBoolBinding(for: \.includeVmBundles))
-                    Toggle("Include cache directories", isOn: formBoolBinding(for: \.includeCacheDirs))
-                    Toggle(
-                        "Include secondary .claude/.credentials.json",
-                        isOn: formBoolBinding(for: \.includeSensitiveClaudeCredentials)
-                    )
-
-                    inputRow(
-                        title: "Parallel Remote",
-                        hint: "Positive integer. Controls remote hashing parallelism."
-                    ) {
-                        TextField("example: 4", text: formStringBinding(for: \.parallelRemote))
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    inputRow(
-                        title: "Parallel Local",
-                        hint: "Positive integer. Reserved for local parallel merge stages."
-                    ) {
-                        TextField("example: 8", text: formStringBinding(for: \.parallelLocal))
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    inputRow(title: "Log Level") {
-                        Picker("Log Level", selection: formStringBinding(for: \.logLevel)) {
-                            Text("DEBUG").tag("DEBUG")
-                            Text("INFO").tag("INFO")
-                            Text("WARNING").tag("WARNING")
-                            Text("ERROR").tag("ERROR")
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)
                     }
                 }
-            }
 
-            if !viewModel.validationErrors.isEmpty {
-                Section("Validation") {
-                    ForEach(viewModel.validationErrors, id: \.self) { error in
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
+                sectionCard("Profiles") {
+                    inputRow(
+                        title: "Profile A",
+                        hint: "Local live Claude profile to merge into."
+                    ) {
+                        pathInput(
+                            text: formStringBinding(for: \.profileA),
+                            browseAction: {
+                                if let selectedPath = DirectoryPicker.pickDirectory() {
+                                    viewModel.form.profileA = selectedPath
+                                }
+                            }
+                        )
+                    }
+
+                    if viewModel.sourceMode == .localProfileB {
+                        inputRow(
+                            title: "Profile B",
+                            hint: "Secondary local profile directory."
+                        ) {
+                            pathInput(
+                                text: formStringBinding(for: \.profileB),
+                                browseAction: {
+                                    if let selectedPath = DirectoryPicker.pickDirectory() {
+                                        viewModel.form.profileB = selectedPath
+                                    }
+                                }
+                            )
+                        }
+                    } else {
+                        inputRow(
+                            title: "Merge From",
+                            hint: "Remote host in user@host format."
+                        ) {
+                            TextField("user@remote-mac", text: formStringBinding(for: \.mergeFrom))
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        inputRow(
+                            title: "Remote Profile Path",
+                            hint: "Remote Claude profile path (absolute or relative to remote home)."
+                        ) {
+                            TextField(
+                                "Library/Application Support/Claude",
+                                text: formStringBinding(for: \.remoteProfilePath)
+                            )
+                            .textFieldStyle(.roundedBorder)
+                        }
+                    }
+
+                    inputRow(
+                        title: "Output Profile",
+                        hint: "Optional explicit output directory; leave empty for temp output path."
+                    ) {
+                        pathInput(
+                            text: formStringBinding(for: \.outputProfile),
+                            browseAction: {
+                                if let selectedPath = DirectoryPicker.pickDirectory() {
+                                    viewModel.form.outputProfile = selectedPath
+                                }
+                            }
+                        )
+                    }
+                }
+
+                sectionCard("Browser State") {
+                    Toggle("Skip browser-state merge", isOn: formBoolBinding(for: \.skipBrowserState))
+
+                    if !viewModel.form.skipBrowserState {
+                        Toggle("Auto export browser state", isOn: formBoolBinding(for: \.autoExportBrowserState))
+                        Toggle(
+                            "Run browser export/import in headless mode",
+                            isOn: formBoolBinding(for: \.headlessBrowserState)
+                        )
+                        Toggle("Skip IndexedDB merge", isOn: formBoolBinding(for: \.skipIndexedDB))
+
+                        DisclosureGroup("Manual browser-state files", isExpanded: $viewModel.showManualBrowserState) {
+                            VStack(spacing: 10) {
+                                inputRow(
+                                    title: "Browser State A JSON",
+                                    hint: "Optional when auto export is enabled."
+                                ) {
+                                    pathInput(
+                                        text: formStringBinding(for: \.browserStateA),
+                                        browseAction: {
+                                            if let selectedPath = DirectoryPicker.pickFile() {
+                                                viewModel.form.browserStateA = selectedPath
+                                            }
+                                        }
+                                    )
+                                }
+
+                                inputRow(
+                                    title: "Browser State B JSON",
+                                    hint: "Optional when auto export is enabled."
+                                ) {
+                                    pathInput(
+                                        text: formStringBinding(for: \.browserStateB),
+                                        browseAction: {
+                                            if let selectedPath = DirectoryPicker.pickFile() {
+                                                viewModel.form.browserStateB = selectedPath
+                                            }
+                                        }
+                                    )
+                                }
+
+                                inputRow(
+                                    title: "Browser State Output JSON",
+                                    hint: "Destination path for merged browser-state output."
+                                ) {
+                                    pathInput(
+                                        text: formStringBinding(for: \.browserStateOutput),
+                                        browseAction: {
+                                            if let selectedPath = DirectoryPicker.pickSaveFile(
+                                                defaultName: "browser_state_merged.json"
+                                            ) {
+                                                viewModel.form.browserStateOutput = selectedPath
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                            .padding(.top, 8)
+                        }
+                        .padding(.top, 2)
+                    }
+                }
+
+                sectionCard("Merge Behavior") {
+                    inputRow(
+                        title: "Unknown Key Base",
+                        hint: "Keep unknown browser keys from source A or B."
+                    ) {
+                        Picker("Base Source", selection: formStringBinding(for: \.baseSource)) {
+                            Text("A").tag("a")
+                            Text("B").tag("b")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                    }
+
+                    Toggle("Apply merged profile after validation", isOn: formBoolBinding(for: \.apply))
+                    Toggle("Force overwrite existing output profile", isOn: formBoolBinding(for: \.force))
+                }
+
+                sectionCard("Advanced") {
+                    DisclosureGroup("Advanced Options", isExpanded: $viewModel.showAdvancedOptions) {
+                        VStack(spacing: 10) {
+                            Toggle("Include remote vm_bundles", isOn: formBoolBinding(for: \.includeVmBundles))
+                            Toggle("Include cache directories", isOn: formBoolBinding(for: \.includeCacheDirs))
+                            Toggle(
+                                "Include secondary .claude/.credentials.json",
+                                isOn: formBoolBinding(for: \.includeSensitiveClaudeCredentials)
+                            )
+
+                            inputRow(
+                                title: "Parallel Remote",
+                                hint: "Positive integer. Controls remote hashing parallelism."
+                            ) {
+                                TextField("example: 4", text: formStringBinding(for: \.parallelRemote))
+                                    .textFieldStyle(.roundedBorder)
+                            }
+
+                            inputRow(
+                                title: "Parallel Local",
+                                hint: "Positive integer. Reserved for local parallel merge stages."
+                            ) {
+                                TextField("example: 8", text: formStringBinding(for: \.parallelLocal))
+                                    .textFieldStyle(.roundedBorder)
+                            }
+
+                            inputRow(title: "Log Level") {
+                                Picker("Log Level", selection: formStringBinding(for: \.logLevel)) {
+                                    Text("DEBUG").tag("DEBUG")
+                                    Text("INFO").tag("INFO")
+                                    Text("WARNING").tag("WARNING")
+                                    Text("ERROR").tag("ERROR")
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.segmented)
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                }
+
+                if !viewModel.validationErrors.isEmpty {
+                    sectionCard("Validation") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(viewModel.validationErrors, id: \.self) { error in
+                                Label(error, systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.red)
+                            }
+                        }
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var executionPane: some View {
@@ -324,6 +355,7 @@ struct ContentView: View {
             }
             .frame(maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var statusSymbolName: String {
@@ -378,6 +410,19 @@ struct ContentView: View {
     }
 
     @ViewBuilder
+    private func sectionCard<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+            content()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
     private func inputRow<Content: View>(
         title: String,
         hint: String? = nil,
@@ -393,7 +438,6 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 2)
     }
 
     @ViewBuilder
@@ -401,7 +445,9 @@ struct ContentView: View {
         HStack(spacing: 8) {
             TextField("", text: text)
                 .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: .infinity)
             Button("Browse", action: browseAction)
+                .frame(width: 72)
         }
     }
 }

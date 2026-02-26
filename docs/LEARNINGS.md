@@ -37,3 +37,5 @@
 - A two-pane SwiftUI desktop layout (configuration on left, run status/logs on right) improves scanability for long-running operational tools because users can monitor output without losing form context.
 - Progressive disclosure (`DisclosureGroup`) for advanced options and manual browser-state paths reduces configuration errors by hiding low-frequency controls during common merges.
 - Enforcing source-mode exclusivity in the UI (local profile B vs remote host) prevents a common invalid state before command execution and keeps validation noise low.
+- On macOS, embedding large dynamic forms directly inside `HSplitView` can produce clipping/misalignment under aggressive window resizing; a custom scrollable card layout with explicit top-leading frames is more stable.
+- A breakpoint-driven layout (`HSplitView` wide, stacked vertical on narrower windows) prevents unusable compression and improves perceived scaling behavior.
