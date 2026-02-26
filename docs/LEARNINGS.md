@@ -39,3 +39,4 @@
 - Enforcing source-mode exclusivity in the UI (local profile B vs remote host) prevents a common invalid state before command execution and keeps validation noise low.
 - On macOS, embedding large dynamic forms directly inside `HSplitView` can produce clipping/misalignment under aggressive window resizing; a custom scrollable card layout with explicit top-leading frames is more stable.
 - A breakpoint-driven layout (`HSplitView` wide, stacked vertical on narrower windows) prevents unusable compression and improves perceived scaling behavior.
+- SwiftUI macOS apps launched via `swift run` may not automatically grab keyboard focus from Terminal; explicitly activating `NSApp` and making the first window key on launch fixes terminal-focused typing.

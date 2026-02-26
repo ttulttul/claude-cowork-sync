@@ -58,6 +58,8 @@ Run the GUI from source:
 swift run --package-path swift-gui CoworkMergeApp
 ```
 
+When launching from Terminal with `swift run`, the app now auto-activates and takes keyboard focus on startup.
+
 Inside the app:
 
 - Set `Repository Root` to this repo path so `uv run cowork-merge ...` can resolve `pyproject.toml`.
