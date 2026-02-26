@@ -56,3 +56,4 @@
 - Blocking SSH scan phases can feel like hangs unless they render explicit progress labels; adding spinner stages for remote preflight and remote hash scans gives clear operator feedback before diff bars appear.
 - Session tree merge work is independent per session ID, so it can safely use local parallel workers (`--parallel-local`) to reduce merge wall time without changing merge semantics.
 - Remote hash scan throughput improves when each `xargs` worker hashes small batches of files instead of spawning a shell per file, which reduces process-launch overhead on both Linux and macOS remotes.
+- The local planning phase after remote hash scans should emit its own progress (including hash-output parsing heartbeat and in-flight diff counters from worker threads), otherwise large runs appear stalled even though CPU-bound comparison work is actively running.

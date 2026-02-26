@@ -3,6 +3,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{debug, error, info, warn};
@@ -89,6 +91,7 @@ const NON_ESSENTIAL_CACHE_PATHS: [&str; 18] = [
     "$BASE_NAME/Network/Cache/*",
 ];
 const REMOTE_HASH_XARGS_BATCH_SIZE: usize = 32;
+const LOCAL_DIFF_PROGRESS_UPDATE_STRIDE: u64 = 16;
 
 pub fn fetch_remote_profile(
     remote_host: &str,
@@ -213,7 +216,7 @@ fn fetch_remote_profile_incremental(
         parallel_remote,
     )?;
 
-    let mut base_diff_progress = TerminalProgress::new(
+    let base_diff_progress = Arc::new(Mutex::new(TerminalProgress::new(
         "Base diff",
         if remote_base_hashes.is_empty() {
             None
@@ -222,25 +225,27 @@ fn fetch_remote_profile_incremental(
         },
         "files",
         ProgressColor::Yellow,
-    );
+    )));
     let base_plan = plan_remote_base_sync(
         &remote_base_hashes,
         baseline_profile,
         &base_cache_root,
         hash_algorithm,
         parallel_local,
-        Some(&mut base_diff_progress),
+        Some(Arc::clone(&base_diff_progress)),
     );
-    base_diff_progress.finish(
-        remote_base_hashes.len() as u64,
-        &format!(
-            "transfer_paths={} seed_local={} seed_cache={}",
-            base_plan.transfer_paths.len(),
-            base_plan.seed_from_baseline.len(),
-            base_plan.seed_from_cache.len()
-        ),
-        true,
-    );
+    if let Ok(mut progress_guard) = base_diff_progress.lock() {
+        progress_guard.finish(
+            remote_base_hashes.len() as u64,
+            &format!(
+                "transfer_paths={} seed_local={} seed_cache={}",
+                base_plan.transfer_paths.len(),
+                base_plan.seed_from_baseline.len(),
+                base_plan.seed_from_cache.len()
+            ),
+            true,
+        );
+    }
     info!(
         "Incremental base diff: remote_files={} transfer_paths={} seed_local={} seed_cache={}",
         remote_base_hashes.len(),
@@ -292,7 +297,7 @@ fn fetch_remote_profile_incremental(
         )
     })?;
 
-    let mut session_diff_progress = TerminalProgress::new(
+    let session_diff_progress = Arc::new(Mutex::new(TerminalProgress::new(
         "Session diff",
         if remote_hashes.is_empty() {
             None
@@ -301,24 +306,26 @@ fn fetch_remote_profile_incremental(
         },
         "sessions",
         ProgressColor::Magenta,
-    );
+    )));
     let session_plan = plan_remote_session_sync(
         &remote_hashes,
         baseline_profile,
         &session_cache_root,
         hash_algorithm,
         parallel_local,
-        Some(&mut session_diff_progress),
+        Some(Arc::clone(&session_diff_progress)),
     );
-    session_diff_progress.finish(
-        remote_hashes.len() as u64,
-        &format!(
-            "transfer_sessions={} seed_cache={}",
-            session_plan.transfer_entries.len(),
-            session_plan.seed_from_cache_entries.len()
-        ),
-        true,
-    );
+    if let Ok(mut progress_guard) = session_diff_progress.lock() {
+        progress_guard.finish(
+            remote_hashes.len() as u64,
+            &format!(
+                "transfer_sessions={} seed_cache={}",
+                session_plan.transfer_entries.len(),
+                session_plan.seed_from_cache_entries.len()
+            ),
+            true,
+        );
+    }
     info!(
         "Incremental session diff: remote_sessions={} transfer_sessions={} seed_cache={}",
         remote_hashes.len(),
@@ -624,7 +631,13 @@ fn list_remote_session_json_hashes(
         );
     }
 
-    parse_remote_hash_lines(&completed.stdout)
+    run_with_spinner_result(
+        "Remote session hash parse",
+        "parsing remote hash list",
+        ProgressColor::Magenta,
+        "parsed",
+        || parse_remote_hash_lines(&completed.stdout),
+    )
 }
 
 fn list_remote_non_session_file_hashes(
@@ -669,7 +682,13 @@ fn list_remote_non_session_file_hashes(
         );
     }
 
-    parse_remote_hash_lines(&completed.stdout)
+    run_with_spinner_result(
+        "Remote base hash parse",
+        "parsing remote hash list",
+        ProgressColor::Yellow,
+        "parsed",
+        || parse_remote_hash_lines(&completed.stdout),
+    )
 }
 
 fn parse_remote_hash_lines(stdout: &[u8]) -> Result<HashMap<String, String>> {
@@ -722,7 +741,7 @@ fn format_remote_parallel(parallel_remote: Option<usize>) -> String {
 fn paths_to_transfer_for_remote_sessions(
     remote_hashes: &HashMap<String, String>,
     baseline_profile: &Path,
-    progress: Option<&mut TerminalProgress>,
+    progress: Option<Arc<Mutex<TerminalProgress>>>,
 ) -> Vec<String> {
     let cache_root = baseline_profile.join(".__cowork_missing_session_cache__");
     let plan = plan_remote_session_sync(
@@ -742,7 +761,7 @@ fn plan_remote_session_sync(
     session_cache_root: &Path,
     hash_algorithm: HashAlgorithm,
     parallel_local: usize,
-    mut progress: Option<&mut TerminalProgress>,
+    progress: Option<Arc<Mutex<TerminalProgress>>>,
 ) -> SessionSyncPlan {
     enum SessionDecision {
         Ignore,
@@ -756,6 +775,11 @@ fn plan_remote_session_sync(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    let total_paths = sorted_paths.len() as u64;
+    let completed_count = AtomicU64::new(0);
+    let transfer_count = AtomicU64::new(0);
+    let seed_cache_count = AtomicU64::new(0);
+    let progress_shared = progress.clone();
     let hash_pool = build_local_hash_pool(parallel_local);
     let decisions: Vec<SessionDecision> = hash_pool.install(|| {
         sorted_paths
@@ -770,7 +794,11 @@ fn plan_remote_session_sync(
                     .map(String::as_str)
                     .unwrap_or_default();
                 let local_json = baseline_profile.join(relative_json);
-                if should_transfer_remote_session_json(&local_json, remote_hash, hash_algorithm) {
+                let decision = if should_transfer_remote_session_json(
+                    &local_json,
+                    remote_hash,
+                    hash_algorithm,
+                ) {
                     if session_cache_has_entry(
                         session_cache_root,
                         relative_json,
@@ -784,27 +812,61 @@ fn plan_remote_session_sync(
                     }
                 } else {
                     SessionDecision::Ignore
+                };
+
+                match &decision {
+                    SessionDecision::SeedFromCache(_) => {
+                        seed_cache_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    SessionDecision::Transfer(_) => {
+                        transfer_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    SessionDecision::Ignore => {}
                 }
+
+                let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(progress_ref) = progress_shared.as_ref() {
+                    if completed % LOCAL_DIFF_PROGRESS_UPDATE_STRIDE == 0
+                        || completed == total_paths
+                    {
+                        if let Ok(mut progress_guard) = progress_ref.lock() {
+                            progress_guard.update(
+                                completed,
+                                &format!(
+                                    "transfer_sessions={} seed_cache={}",
+                                    transfer_count.load(Ordering::Relaxed),
+                                    seed_cache_count.load(Ordering::Relaxed)
+                                ),
+                                false,
+                            );
+                        }
+                    }
+                }
+
+                decision
             })
             .collect()
     });
 
     let mut plan = SessionSyncPlan::default();
-    for (index, decision) in decisions.into_iter().enumerate() {
+    for decision in decisions {
         match decision {
             SessionDecision::Ignore => {}
             SessionDecision::SeedFromCache(entry) => plan.seed_from_cache_entries.push(entry),
             SessionDecision::Transfer(entry) => plan.transfer_entries.push(entry),
         }
-        if let Some(progress_ref) = progress.as_mut() {
-            progress_ref.update(
-                (index + 1) as u64,
+    }
+
+    if let Some(progress_ref) = progress.as_ref() {
+        if let Ok(mut progress_guard) = progress_ref.lock() {
+            progress_guard.update(
+                total_paths,
                 &format!(
                     "transfer_sessions={} seed_cache={}",
                     plan.transfer_entries.len(),
                     plan.seed_from_cache_entries.len()
                 ),
-                false,
+                true,
             );
         }
     }
@@ -838,7 +900,7 @@ fn plan_remote_base_sync(
     base_cache_root: &Path,
     hash_algorithm: HashAlgorithm,
     parallel_local: usize,
-    mut progress: Option<&mut TerminalProgress>,
+    progress: Option<Arc<Mutex<TerminalProgress>>>,
 ) -> BaseSyncPlan {
     enum BaseDecision {
         SeedFromBaseline(String),
@@ -852,6 +914,12 @@ fn plan_remote_base_sync(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    let total_paths = sorted_paths.len() as u64;
+    let completed_count = AtomicU64::new(0);
+    let transfer_count = AtomicU64::new(0);
+    let seed_local_count = AtomicU64::new(0);
+    let seed_cache_count = AtomicU64::new(0);
+    let progress_shared = progress.clone();
     let hash_pool = build_local_hash_pool(parallel_local);
     let decisions: Vec<BaseDecision> = hash_pool.install(|| {
         sorted_paths
@@ -861,7 +929,7 @@ fn plan_remote_base_sync(
                     .get(relative_path)
                     .map(String::as_str)
                     .unwrap_or_default();
-                if local_file_matches_hash(
+                let decision = if local_file_matches_hash(
                     &baseline_profile.join(relative_path),
                     remote_hash,
                     hash_algorithm,
@@ -875,28 +943,65 @@ fn plan_remote_base_sync(
                     BaseDecision::SeedFromCache(relative_path.clone())
                 } else {
                     BaseDecision::Transfer(relative_path.clone())
+                };
+
+                match &decision {
+                    BaseDecision::SeedFromBaseline(_) => {
+                        seed_local_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    BaseDecision::SeedFromCache(_) => {
+                        seed_cache_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    BaseDecision::Transfer(_) => {
+                        transfer_count.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
+
+                let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(progress_ref) = progress_shared.as_ref() {
+                    if completed % LOCAL_DIFF_PROGRESS_UPDATE_STRIDE == 0
+                        || completed == total_paths
+                    {
+                        if let Ok(mut progress_guard) = progress_ref.lock() {
+                            progress_guard.update(
+                                completed,
+                                &format!(
+                                    "transfer_paths={} seed_local={} seed_cache={}",
+                                    transfer_count.load(Ordering::Relaxed),
+                                    seed_local_count.load(Ordering::Relaxed),
+                                    seed_cache_count.load(Ordering::Relaxed)
+                                ),
+                                false,
+                            );
+                        }
+                    }
+                }
+
+                decision
             })
             .collect()
     });
 
     let mut plan = BaseSyncPlan::default();
-    for (index, decision) in decisions.into_iter().enumerate() {
+    for decision in decisions {
         match decision {
             BaseDecision::SeedFromBaseline(path) => plan.seed_from_baseline.push(path),
             BaseDecision::SeedFromCache(path) => plan.seed_from_cache.push(path),
             BaseDecision::Transfer(path) => plan.transfer_paths.push(path),
         }
-        if let Some(progress_ref) = progress.as_mut() {
-            progress_ref.update(
-                (index + 1) as u64,
+    }
+
+    if let Some(progress_ref) = progress.as_ref() {
+        if let Ok(mut progress_guard) = progress_ref.lock() {
+            progress_guard.update(
+                total_paths,
                 &format!(
                     "transfer_paths={} seed_local={} seed_cache={}",
                     plan.transfer_paths.len(),
                     plan.seed_from_baseline.len(),
                     plan.seed_from_cache.len()
                 ),
-                false,
+                true,
             );
         }
     }
