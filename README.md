@@ -31,6 +31,12 @@ This repo is managed with `uv`.
 uv run cowork-merge --help
 ```
 
+Rust version (in subdirectory):
+
+```bash
+cargo run --manifest-path rust-sync/Cargo.toml -- --help
+```
+
 Run tests:
 
 ```bash
@@ -42,6 +48,39 @@ Run Swift GUI tests:
 ```bash
 swift test --package-path swift-gui
 ```
+
+Run Rust tests:
+
+```bash
+cargo test --manifest-path rust-sync/Cargo.toml
+```
+
+## Rust CLI (subdirectory: `rust-sync/`)
+
+The repository now includes a Rust CLI implementation at `rust-sync/`.
+
+Current Rust command coverage:
+- `merge`
+- `deploy`
+
+Rust quick start (filesystem sync path):
+
+```bash
+cargo run --manifest-path rust-sync/Cargo.toml -- merge \
+  --merge-from "user@remote-mac" \
+  --skip-browser-state \
+  --apply
+```
+
+Rust browser-state behavior:
+- Logical browser-state merge is supported when you provide all three explicit paths:
+  - `--browser-state-a`
+  - `--browser-state-b`
+  - `--browser-state-output`
+- Rust mode does not yet auto-export/import browser state with Playwright.
+- Rust `--apply` currently supports filesystem-only deploy (`--skip-browser-state`).
+
+If you need one-command browser-state auto-export/import (`--auto-export-browser-state` + browser import on apply), continue using the Python CLI for now.
 
 ## Swift GUI app (macOS)
 

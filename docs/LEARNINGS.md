@@ -40,3 +40,10 @@
 - On macOS, embedding large dynamic forms directly inside `HSplitView` can produce clipping/misalignment under aggressive window resizing; a custom scrollable card layout with explicit top-leading frames is more stable.
 - A breakpoint-driven layout (`HSplitView` wide, stacked vertical on narrower windows) prevents unusable compression and improves perceived scaling behavior.
 - SwiftUI macOS apps launched via `swift run` may not automatically grab keyboard focus from Terminal; explicitly activating `NSApp` and making the first window key on launch fixes terminal-focused typing.
+
+## 2026-02-26
+
+- A practical Rust port can preserve the core Cowork synchronization semantics by reusing the same merge rules: timestamp-aware metadata precedence, audit dedupe, deterministic payload conflict suffixes, and local cache-directory exclusion defaults.
+- For Claude profile copy reliability, preserving symlinks (including dangling ones) is required in the Rust base-profile copy stage, otherwise session debug-link paths can fail or be silently altered.
+- Rust can merge logical browser-state JSON exports with parity for `cowork-read-state`, session binding hydration, draft key timestamp precedence, and IndexedDB timestamp conflict resolution without touching Chromium LevelDB internals.
+- A safe initial Rust `--apply` mode should remain filesystem-only until browser-state import is implemented natively; this avoids implying end-to-end browser-state deployment when only merge output generation exists.
