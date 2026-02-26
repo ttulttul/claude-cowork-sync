@@ -92,6 +92,7 @@ Rust browser-state behavior:
 - Rust session-delta planning now also reuses a host-scoped local session cache, so unchanged remote sessions can be seeded locally instead of re-downloaded over SSH on subsequent runs.
 - Rust remote hash scans now batch files per `xargs` worker process to reduce shell spawn overhead during `Remote base hash scan` and `Remote session hash scan`.
 - Rust now shows explicit parse spinners after remote hash scans and live per-file `Base diff` / `Session diff` progress while local parallel hash comparison planning is running (no long silent gap before diff bars advance).
+- Rust terminal progress now clears line-overwrite artifacts correctly even when ANSI colorized status text changes line length between updates.
 
 ## Swift GUI app (macOS)
 

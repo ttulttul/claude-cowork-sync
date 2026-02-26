@@ -57,3 +57,4 @@
 - Session tree merge work is independent per session ID, so it can safely use local parallel workers (`--parallel-local`) to reduce merge wall time without changing merge semantics.
 - Remote hash scan throughput improves when each `xargs` worker hashes small batches of files instead of spawning a shell per file, which reduces process-launch overhead on both Linux and macOS remotes.
 - The local planning phase after remote hash scans should emit its own progress (including hash-output parsing heartbeat and in-flight diff counters from worker threads), otherwise large runs appear stalled even though CPU-bound comparison work is actively running.
+- Terminal overwrite padding must be based on visible character width (ANSI-stripped), not raw string byte length, otherwise colorized status transitions can leave stale trailing characters on reused lines.

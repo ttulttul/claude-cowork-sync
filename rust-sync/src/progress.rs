@@ -59,7 +59,7 @@ pub struct TerminalProgress {
     color: ProgressColor,
     min_interval: Duration,
     last_render: Instant,
-    last_line_len: usize,
+    last_line_width: usize,
     spinner_index: usize,
     color_enabled: bool,
     active: bool,
@@ -83,7 +83,7 @@ impl TerminalProgress {
             color,
             min_interval: Duration::from_millis(80),
             last_render: now,
-            last_line_len: 0,
+            last_line_width: 0,
             spinner_index: 0,
             color_enabled,
             active: render_enabled,
@@ -175,8 +175,9 @@ impl TerminalProgress {
     }
 
     fn pad_for_overwrite(&mut self, line: &str) -> String {
-        let extra = self.last_line_len.saturating_sub(line.len());
-        self.last_line_len = line.len();
+        let line_width = visible_text_width(line);
+        let extra = self.last_line_width.saturating_sub(line_width);
+        self.last_line_width = line_width;
         if extra == 0 {
             line.to_string()
         } else {
@@ -285,9 +286,40 @@ fn progress_bar(ratio: f64, width: usize) -> String {
     )
 }
 
+fn visible_text_width(text: &str) -> usize {
+    let mut width = 0_usize;
+    let bytes = text.as_bytes();
+    let mut index = 0_usize;
+    while index < bytes.len() {
+        if bytes[index] == 0x1b {
+            if index + 1 < bytes.len() && bytes[index + 1] == b'[' {
+                index += 2;
+                while index < bytes.len() {
+                    let byte = bytes[index];
+                    index += 1;
+                    if byte.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+
+        if let Some(ch) = text[index..].chars().next() {
+            width += 1;
+            index += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    width
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_bytes, progress_bar};
+    use super::{format_bytes, progress_bar, visible_text_width};
 
     #[test]
     fn format_bytes_formats_expected_units() {
@@ -301,5 +333,12 @@ mod tests {
         assert_eq!(progress_bar(-1.0, 4), "[----]");
         assert_eq!(progress_bar(0.5, 4), "[##--]");
         assert_eq!(progress_bar(2.0, 4), "[####]");
+    }
+
+    #[test]
+    fn visible_text_width_ignores_ansi_sequences() {
+        let plain = "Playwright preflight: OK ready";
+        let colored = "Playwright preflight: \u{1b}[32mOK\u{1b}[0m ready";
+        assert_eq!(visible_text_width(colored), visible_text_width(plain));
     }
 }
