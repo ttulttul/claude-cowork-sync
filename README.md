@@ -1,10 +1,10 @@
 # claude-cowork-sync
 
-Offline tooling for merging two Claude Desktop profiles on macOS, with Cowork session filesystem data plus logical browser storage state.
+Rust CLI for synchronizing Claude Cowork state between machines on macOS.
 
-## Quick Start - Copy Claude Cowork state from a remote Mac
+## Fast Path (Most Common Use Case)
 
-The following command fetches the remote Claude Cowork state, merging it with Cowork on your local Mac, safely checking to make sure nothing on your local Mac is overwritten that should not be:
+Merge Cowork state from a remote Mac into your local Mac, then apply it to your live local Claude profile:
 
 ```bash
 cargo run -- merge \
@@ -12,20 +12,71 @@ cargo run -- merge \
   --apply
 ```
 
-## What this solves
+This is the normal workflow for two machines (local + remote).
 
-- Safely merges `local-agent-mode-sessions` from two profile copies.
-- Merges browser storage at logical key/value level (not raw LevelDB files).
-- Produces validation output before deployment.
-- Supports atomic profile swap with rollback backup.
+## What That Command Does
 
-## Why not rsync LevelDB files
+1. Checks that Claude is not running on the remote host.
+2. Incrementally fetches remote profile data over SSH (only changed files/sessions where possible).
+3. Merges Cowork session filesystem state.
+4. Merges browser state (LocalStorage and optionally IndexedDB) via native Rust Playwright.
+5. Validates merged output.
+6. Imports merged browser state into the merged profile.
+7. Atomically swaps the merged profile into your live local profile (backup kept).
 
-Chromium LocalStorage/IndexedDB use LevelDB LSM internals (`MANIFEST`, `*.ldb`, `*.log`, `LOCK`) that are not file-merge-safe. This tool merges exported logical storage maps instead, then writes a fresh merged state.
+## Prerequisites
 
-## Install / run
+1. Quit Claude on both machines.
+2. Ensure SSH access works to remote host (`ssh user@remote-mac`).
+3. Install Playwright Chromium once (required for browser-state merge/apply):
 
-Primary CLI/runtime is now Rust at repo root.
+```bash
+npx playwright@1.56.1 install chromium
+```
+
+If you intentionally want filesystem-only merge, use `--skip-browser-state`.
+
+## Common Workflows
+
+Dry-run merge from remote (no deploy):
+
+```bash
+cargo run -- merge \
+  --merge-from "user@remote-mac"
+```
+
+Filesystem-only merge + apply (fastest path, skips browser-state handling):
+
+```bash
+cargo run -- merge \
+  --merge-from "user@remote-mac" \
+  --skip-browser-state \
+  --apply
+```
+
+Tune performance for large profiles:
+
+```bash
+cargo run -- merge \
+  --merge-from "user@remote-mac" \
+  --parallel-remote 64 \
+  --parallel-local 64 \
+  --hash-algorithm sha1 \
+  --apply
+```
+
+## Defaults That Matter
+
+- Local profile (`--profile-a`) default: `~/Library/Application Support/Claude`
+- Remote profile (`--remote-profile-path`) default: `~/Library/Application Support/Claude`
+- `--merge-from` uses local profile A as incremental baseline.
+- Browser-state auto-export is enabled for `--merge-from` when explicit browser-state files are not provided.
+- Progress rendering is enabled on TTY by default.
+  - Disable with: `COWORK_MERGE_PROGRESS=0`
+
+## Build and Test
+
+Show CLI help:
 
 ```bash
 cargo run -- --help
@@ -37,346 +88,83 @@ Run Rust tests:
 cargo test
 ```
 
-Run legacy Python tests:
+Legacy Python tests (deprecated stack under `python/`):
 
 ```bash
 uv run --project python pytest
 ```
 
-Run legacy Swift GUI tests:
+Legacy Swift GUI tests (deprecated stack under `python/`):
 
 ```bash
 swift test --package-path python/swift-gui
 ```
 
-## Rust CLI (root crate)
+## Project Status and Layout
 
-The repository now includes a Rust CLI implementation at repo root.
+Active implementation:
 
-Current Rust command coverage:
-- `merge`
-- `export-browser-state`
-- `import-browser-state`
-- `deploy`
+- Rust CLI at repo root (`Cargo.toml`, `src/`)
 
-Rust quick start (filesystem sync path):
+Deprecated legacy implementations:
 
-```bash
-cargo run -- merge \
-  --merge-from "user@remote-mac" \
-  --skip-browser-state \
-  --apply
-```
+- Python CLI and tests in `python/`
+- Swift GUI wrapper in `python/swift-gui/`
 
-Rust browser-state behavior:
-- Supports native Rust Playwright export/import (no Python bridge).
-- Supports automatic Playwright export during merge:
-  - `--auto-export-browser-state` (also auto-enabled for `--merge-from` when browser-state paths are not provided)
-- Supports Playwright import during `merge --apply` when browser-state merge is enabled.
-- Headless browser-state mode is enabled by default and can be disabled with `--no-headless-browser-state`.
-- Install Playwright Chromium for Rust CLI usage:
-  - `npx playwright@1.56.1 install chromium`
-- Rust CLI now shows live terminal progress (spinners/bars) for merge stages, remote fetch streaming, and browser import/export when output is a TTY.
-- Rust `merge --merge-from` uses local profile A as an incremental baseline and transfers only changed remote non-session files plus changed/new remote session trees.
-- Rust `merge` supports `--parallel-remote <N>` to control remote hash parallelism during incremental transfer planning.
-- Rust `merge` supports `--parallel-local <N>` to parallelize local diff hashing and session merge execution.
-- Rust `merge` supports `--hash-algorithm {sha256|sha1}` for both local and remote diff hashing (default: `sha256`).
-- Rust remote fetch now emits explicit spinner stages for hidden SSH scan work (`Remote preflight`, `Remote base hash scan`, `Remote session hash scan`) before diff bars begin.
-- Rust remote base-file planning now reuses a local host-scoped cache under the system temp directory, seeding unchanged files from local baseline or cache before SSH transfer to reduce repeated full base downloads.
-- Rust session-delta planning now also reuses a host-scoped local session cache, so unchanged remote sessions can be seeded locally instead of re-downloaded over SSH on subsequent runs.
-- Rust remote hash scans now batch files per `xargs` worker process to reduce shell spawn overhead during `Remote base hash scan` and `Remote session hash scan`.
-- Rust now shows explicit parse spinners after remote hash scans and live per-file `Base diff` / `Session diff` progress while local parallel hash comparison planning is running (no long silent gap before diff bars advance).
-- Rust terminal progress now clears line-overwrite artifacts correctly even when ANSI colorized status text changes line length between updates.
-- Rust session merge now parallelizes per-file secondary-tree reconciliation within each session (for `uploads/`, `outputs/`, and `.claude/` payload files), not just per-session.
-- Rust secondary-file merge now uses metadata-first short-circuits (size/inode/mtime) to avoid unnecessary full-file hashing on unchanged or obviously-different files.
+## Appendix A: Detailed Merge Behavior
 
-## Legacy Python + Swift GUI (Deprecated)
+### Why this tool exists
 
-- Deprecated Python CLI and tests now live under `python/`.
-- Deprecated Swift GUI now lives under `python/swift-gui/`.
-- Prefer using the Rust CLI at repo root for all active development.
+Raw LevelDB file syncing is unsafe for browser storage. This tool performs logical merges for Claude Cowork state.
 
-## Swift GUI app (macOS)
+### Data sources merged
 
-This repository now includes a native SwiftUI app at `python/swift-gui/` that wraps the legacy Python CLI.
-The GUI builds CLI arguments and runs:
+- Filesystem session data under `local-agent-mode-sessions/`
+- Browser-origin state for `https://claude.ai`:
+  - LocalStorage
+  - IndexedDB (optional)
 
-```bash
-uv run cowork-merge --log-level <LEVEL> merge ...
-```
+### High-level merge phases
 
-Run the GUI from source:
-
-```bash
-swift run --package-path python/swift-gui CoworkMergeApp
-```
-
-When launching from Terminal with `swift run`, the app now auto-activates and takes keyboard focus on startup.
-
-Inside the app:
-
-- Set `Repository Root` to the `python/` directory so `uv run cowork-merge ...` can resolve `pyproject.toml`.
-- Choose a secondary source type (`Local Profile B` or `Remote Host`); the UI clears incompatible fields automatically.
-- Use progressive disclosure for advanced and manual browser-state options to keep routine merges focused.
-- Validate before run with inline error sections and use the command preview pane to verify exact CLI arguments.
-- Review the live execution log pane for streaming output and copy/share logs or command previews directly.
-- The layout adapts to window width: wide windows use a two-pane split, narrower windows stack configuration above execution.
-
-## Expected profile paths (macOS)
-
-- Profile root: `~/Library/Application Support/Claude`
-- Sessions: `local-agent-mode-sessions/`
-- LocalStorage LevelDB: `Local Storage/leveldb/`
-- IndexedDB LevelDB: `IndexedDB/https_claude.ai_0.indexeddb.leveldb/`
-
-## How Claude stores Cowork state
-
-Claude Cowork state is split across filesystem session data and browser-origin storage data.
-
-Filesystem session data:
-- Root: `local-agent-mode-sessions/<user_uuid>/<org_uuid>/`
-- Per session metadata: `local_<session_uuid>.json`
-- Per session event stream: `local_<session_uuid>/audit.jsonl`
-- Per session payloads: `local_<session_uuid>/uploads/*` and `local_<session_uuid>/outputs/*`
-- Per session runtime details: `local_<session_uuid>/.claude/*`
-
-Browser-origin storage data (`https://claude.ai`):
-- `Local Storage/leveldb`: includes keys like `cowork-read-state`, `cc-session-cli-id-*`, `cc-session-cwd-*`
-- `IndexedDB/https_claude.ai_0.indexeddb.leveldb`: includes editor/draft continuity data
-
-Why this matters:
-- Session files alone are not enough to fully restore Cowork behavior.
-- Browser storage alone is not enough to restore full message/event history.
-- A correct merge must combine both layers.
-
-## How the merge works
-
-The tool performs a logical merge, not a raw file rsync.
-
-1. Build source profiles.
-- Local profile A is the baseline source.
-- Profile B is either local (`--profile-b`) or fetched over SSH (`--merge-from`).
-
-2. Fetch remote profile B (when using SSH).
-- Uses incremental transfer against local baseline for session trees.
-- Transfers only remote session trees whose `local_*.json` hash differs, plus remote-only sessions.
-- Excludes remote `vm_bundles` and cache-heavy directories by default.
-- Preserves safe symlinks/hardlinks and reports progress while streaming tar over SSH.
-
-3. Export browser state (when browser-state merge is enabled).
-- Exports LocalStorage and IndexedDB via Playwright APIs.
-- Avoids direct mutation/merge of raw LevelDB internals.
-
-4. Create output profile.
-- Copies local profile A into output as base.
-- Preserves local `vm_bundles`.
-- Excludes non-essential cache directories by default to reduce copy size.
-- Preserves symlinks (including dangling debug links) to avoid copy failures.
-
+1. Build source A (local) and source B (local or remote over SSH).
+2. Incrementally fetch remote source B when `--merge-from` is used.
+3. Export browser state logically using Playwright.
+4. Prepare output profile from source A.
 5. Merge session filesystem trees.
-- Discovers `local_*.json` records from both sources.
-- Merges shared sessions using timestamp-aware field rules.
-- Merges `audit.jsonl` by dedupe key and timestamp ordering.
-- Merges `uploads/` and `outputs/` by path + content hash with deterministic conflict suffixing.
-- Skips importing secondary `.claude/.credentials.json` unless explicitly allowed.
-
 6. Merge browser state maps.
-- Merges `cowork-read-state` by session union + max timestamp.
-- Rehydrates `cc-session-cli-id-*` and `cc-session-cwd-*` from merged metadata.
-- Merges draft keys using embedded timestamps when available.
-- Keeps unknown keys from base by default, filling absent keys from secondary.
-- Optionally merges IndexedDB records by key with timestamp-aware precedence.
-
 7. Validate merged output.
-- Checks `local_*.json` to folder consistency.
-- Checks required CLI binding keys in LocalStorage.
-- Checks `cowork-read-state.sessions` coverage for merged session IDs.
+8. Optionally deploy atomically with backup (`--apply`).
 
-8. Deploy safely.
-- Keep live profile backup.
-- Atomically swap merged profile into live location.
-- Validate in app and roll back from backup if needed.
+### Session merge rules (summary)
 
-## Workflow
+- Session metadata (`local_*.json`) merged with timestamp-aware precedence.
+- `audit.jsonl` deduped and ordered deterministically.
+- Payload files (`uploads/`, `outputs/`, `.claude/`) merged with deterministic conflict naming.
+- Secondary `.claude/.credentials.json` is excluded unless `--include-sensitive-claude-credentials` is set.
 
-1. Close Claude on both machines.
-2. Run merge command (remote source can be fetched automatically over SSH).
-3. Validate output and atomically deploy.
+### Browser-state merge rules (summary)
 
-For a one-command apply flow, use `--apply` on `merge`. The tool will import merged browser state into the merged profile and atomically swap it into your local live profile path (`--profile-a`).
-Before applying, it performs a case-sensitive process check for `Claude` and aborts if Claude is still running.
+- `cowork-read-state` merged by session union + max timestamp.
+- Session binding keys (`cc-session-cli-id-*`, `cc-session-cwd-*`) rehydrated from merged metadata.
+- IndexedDB merging is optional and timestamp-aware.
 
-## Commands
+### Validation checks
 
-### Merge profiles
+- `local_*.json` file/folder consistency.
+- Expected LocalStorage session binding keys.
+- `cowork-read-state.sessions` coverage for merged session IDs.
 
-```bash
-cargo run -- merge \
-  --profile-a "/path/to/profile_a" \
-  --profile-b "/path/to/profile_b" \
-  --output-profile "/path/to/merged_profile" \
-  --browser-state-a "/path/to/state_a.json" \
-  --browser-state-b "/path/to/state_b.json" \
-  --browser-state-output "/path/to/merged_state.json"
-```
+## Appendix B: Key CLI Flags
 
-### Merge from remote host (common path)
-
-```bash
-cargo run -- merge \
-  --merge-from "user@remote-mac"
-```
-
-This mode:
-
-1. Uses local profile A default: `~/Library/Application Support/Claude`.
-2. Fetches remote profile B from SSH host at default path `~/Library/Application Support/Claude`.
-3. Writes merged output to a unique path in the system temp directory like `.../claude-cowork-merged-<timestamp>`.
-4. Uses your local profile as a baseline and only transfers remote session trees whose `local_*.json` hash differs (plus remote-only sessions).
-5. Uses your local profile as a baseline for non-session files too, transferring only changed remote base files.
-6. Excludes remote `vm_bundles` and non-essential cache directories by default to reduce transfer size.
-7. Preserves local `vm_bundles` in the merged output so local VM runtime assets remain usable.
-8. Auto-exports browser state for both profiles and performs the same merge + validation flow.
-9. Verifies `Claude` is not running on the remote host before any profile transfer starts.
-
-To merge and immediately apply to your local live profile:
-
-```bash
-cargo run -- merge \
-  --merge-from "user@remote-mac" \
-  --apply
-```
-
-Note: SSH profile fetch now preserves safe symlink/hardlink tar entries (for example debug pointers like `.../debug/latest`).
-Long-running stages now show live terminal progress by default:
-- Progress bars when total work is known (for example session merge/diff stages).
-- Single-line live updates when total work is unknown (for example tar stream extraction).
-- Colored output in interactive terminals.
-- Remote fetch progress is byte-based and updates continuously while large files stream, which avoids long stalls and jumpy member counters.
-- Remote tar creation sets `COPYFILE_DISABLE=1` to avoid synthetic macOS `._*` metadata members, improving transfer size and progress estimate accuracy.
-- Remote fetch stages use distinct labels when incremental transfer is active (`Remote fetch (base profile)` and `Remote fetch (session delta)`).
-- Browser-state export and base-profile preparation now show spinner progress to avoid silent periods between fetch and merge.
-Default logs are now warning-and-higher to keep normal output focused on progress.
-Auto-export requires Playwright; if unavailable, merge now fails fast before remote transfer starts.
-The same preflight also checks that Playwright Chromium binaries are installed before transfer starts.
-Base-profile copy now preserves symlinks (including dangling debug links) to avoid copy failures in `.claude/debug/latest`.
-
-Options:
-
-- `--skip-browser-state`: merge filesystem sessions only.
+- `--merge-from user@host`: use remote source B over SSH.
+- `--apply`: import merged browser state + atomically swap merged profile into live profile.
+- `--skip-browser-state`: filesystem-only merge.
 - `--skip-indexeddb`: merge LocalStorage but skip IndexedDB.
-- `--base-source {a|b}`: base profile for unknown localStorage keys.
-- `--parallel-remote <N>`: cap remote parallelism used for incremental remote hash scans.
-- `--parallel-local <N>`: cap local parallelism used for incremental diff hashing and session merge work.
-- `--hash-algorithm {sha256|sha1}`: choose local+remote hash algorithm for incremental diffing.
-- `--log-level {DEBUG|INFO|WARNING|ERROR}`: CLI log verbosity.
-  - Default is `WARNING`.
-- `--force`: overwrite existing output profile directory.
-- `--apply`: import merged browser state into merged output and atomically deploy it into `--profile-a`.
-  - Safety check: this aborts if any running process contains case-sensitive `Claude`; quit Claude first.
-  - The check ignores Claude helper-host processes under `Contents/Helpers/...` (for example browser extension native-host helpers).
-- `--merge-from` safety preflight:
-  - Before remote copy begins, the tool checks remote processes and aborts if case-sensitive `Claude` is running on the remote machine.
-  - Remote helper-host processes under `Contents/Helpers/...` are ignored.
-- `--include-sensitive-claude-credentials`: allow copying `.claude/.credentials.json` from secondary side.
-- `--merge-from user@host`: fetch profile B over SSH instead of `--profile-b`.
-- `--remote-profile-path`: remote path to profile directory.
-  - Default is `Library/Application Support/Claude` relative to remote `$HOME`.
-- `--profile-a`: local profile A path.
-  - Default is `~/Library/Application Support/Claude`.
-- `--output-profile`: explicit merged profile output path.
-  - Default is a unique temp path under the system temp directory.
-- `--include-vm-bundles`: include remote `vm_bundles` during SSH fetch.
-  - Local `vm_bundles` are always preserved in output.
-- `--include-cache-dirs`: include non-essential cache directories during remote fetch + base copy.
-  - Default behavior excludes common cache directories (for example `Cache`, `Code Cache`, `GPUCache`, and service worker caches).
-- `--auto-export-browser-state`: export browser state JSONs automatically when not provided.
-- `--headless-browser-state` / `--no-headless-browser-state`: control headless Playwright mode for auto-export/import.
-  - Default is headless mode enabled.
-
-Progress rendering can be disabled with environment variable `COWORK_MERGE_PROGRESS=0`.
-
-When output is a TTY, final merge results are shown as a colorful summary instead of raw JSON.
-
-If Playwright Chromium is missing and you want browser-state merge:
-
-```bash
-npx playwright@1.56.1 install chromium
-```
-
-If you intentionally want filesystem-only merge, use `--skip-browser-state`.
-
-### Export browser state (Playwright)
-
-```bash
-cargo run -- export-browser-state \
-  --profile "/path/to/profile_a" \
-  --output "/path/to/state_a.json"
-```
-
-### Import browser state (Playwright)
-
-```bash
-cargo run -- import-browser-state \
-  --profile "/path/to/merged_profile" \
-  --input "/path/to/merged_state.json" \
-  --replace-local-storage
-```
-
-### Atomic deploy
-
-```bash
-cargo run -- deploy \
-  --live-profile "/Users/ksimpson/Library/Application Support/Claude" \
-  --merged-profile "/path/to/merged_profile" \
-  --backup-parent "/path/to/backups"
-```
-
-## Implemented merge rules
-
-### Filesystem sessions
-
-- `local_*.json` keyed by `session_id`.
-- Shared sessions:
-  - `createdAt`: min
-  - `lastActivityAt`: max
-  - `title`, `model`, `isArchived`: newer record wins (via `lastActivityAt`)
-  - `userApprovedFileAccessPaths`: union distinct
-  - `fsDetectedFiles`: newest per `hostPath`
-  - `mcqAnswers`, `enabledMcpTools`: deep merge, newer wins
-- `audit.jsonl`:
-  - dedupe by `uuid` when present, else raw-line hash
-  - sort by `_audit_timestamp` when present, otherwise preserve source block order
-- Session folder files:
-  - same path + same hash: keep one
-  - same path + different hash: keep both with deterministic suffix
-- `.claude/.credentials.json` from secondary side is skipped by default.
-
-### LocalStorage
-
-- `cowork-read-state`: merged by session union + max timestamp, `initializedAt` min.
-- `cc-session-cli-id-<sessionId>` and `cc-session-cwd-<sessionId>` force-set from merged metadata bindings.
-- `local_<id>:(attachment|files|textInput)`:
-  - prefer payload with newer embedded `updatedAt`/`timestamp`
-  - fallback to newer source profile mtime
-- Unknown keys:
-  - keep base profile value
-  - copy from other profile only when key is absent in base
-
-### IndexedDB (optional)
-
-- Merged by store key.
-- If both rows exist and both include `updatedAt`/`timestamp`, newer row wins.
-- Otherwise base row remains.
-
-## Validation checks
-
-- Every `local_*.json` has matching `local_*/` folder.
-- Each merged session with known CLI binding has `cc-session-cli-id-*`.
-- `cowork-read-state.sessions` includes all merged session IDs.
-
-## Safety notes
-
-- Keep backups.
-- Never merge raw LevelDB files across machines.
-- Validate and spot-check sessions before replacing the live profile.
+- `--parallel-remote <N>`: remote hash scan parallelism.
+- `--parallel-local <N>`: local diff-hash and session-merge parallelism.
+- `--hash-algorithm {sha256|sha1}`: local+remote diff hashing algorithm.
+- `--force`: overwrite output profile directory if it exists.
+- `--include-cache-dirs`: include non-essential cache directories.
+- `--include-vm-bundles`: include remote `vm_bundles` during fetch.
+- `--auto-export-browser-state`: force browser-state auto-export when paths are not provided.
+- `--headless-browser-state` / `--no-headless-browser-state`: Playwright mode control.

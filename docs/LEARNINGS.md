@@ -61,3 +61,4 @@
 - Session-level parallelism alone can still bottleneck when a few sessions contain many payload files; adding per-file parallel reconciliation inside each session improves utilization for skewed workloads.
 - In secondary payload reconciliation, checking metadata first (size mismatch => different, shared inode/mtime match => equal) avoids many expensive full-hash comparisons while preserving deterministic conflict naming.
 - Repository layout now centers Rust at root (`Cargo.toml` + `src/`) while moving the legacy Python CLI and Swift GUI under `python/` with explicit deprecation markers to reduce ambiguity about the active implementation.
+- README clarity improves materially when structured around the primary operational path (`merge --merge-from ... --apply`) with advanced internals moved to appendices; this reduces onboarding friction for day-to-day users.
