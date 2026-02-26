@@ -28,3 +28,9 @@
 - Distinct remote fetch labels (base profile vs session delta) reduce ambiguity when incremental mode performs multiple fetch passes.
 - Back-to-back `--merge-from` runs should avoid re-copying unchanged base-profile files by hashing remote non-session files and transferring only paths whose content differs from the local baseline.
 - For remote tar extraction UX, byte-based progress updated per copy chunk is much more stable than member-count bars, because large files otherwise make progress appear frozen and then jump abruptly.
+
+## 2026-02-25
+
+- A practical Swift migration path is to keep the validated Python merge engine as-is and implement a native SwiftUI shell that constructs CLI arguments and streams process output, which avoids risky logic rewrites.
+- Swift Package test/build execution may fail in constrained environments unless run outside strict sandboxing because `swift` invokes additional sandboxing and cache paths under user-level directories.
+- Keeping command-generation logic in a small testable Swift core target (separate from the UI target) makes it easy to validate form-to-CLI mapping with fast XCTest unit coverage.

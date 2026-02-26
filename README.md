@@ -37,6 +37,33 @@ Run tests:
 uv run pytest
 ```
 
+Run Swift GUI tests:
+
+```bash
+swift test --package-path swift-gui
+```
+
+## Swift GUI app (macOS)
+
+This repository now includes a native SwiftUI app at `swift-gui/` that wraps the existing Python CLI.
+The GUI builds CLI arguments and runs:
+
+```bash
+uv run cowork-merge --log-level <LEVEL> merge ...
+```
+
+Run the GUI from source:
+
+```bash
+swift run --package-path swift-gui CoworkMergeApp
+```
+
+Inside the app:
+
+- Set `Repository Root` to this repo path so `uv run cowork-merge ...` can resolve `pyproject.toml`.
+- Provide exactly one source B input: either `Profile B` or `Merge From (user@host)`.
+- Review the live output pane for command logs and merge results.
+
 ## Expected profile paths (macOS)
 
 - Profile root: `~/Library/Application Support/Claude`
