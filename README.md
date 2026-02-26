@@ -100,6 +100,12 @@ Legacy Swift GUI tests (deprecated stack under `python/`):
 swift test --package-path python/swift-gui
 ```
 
+Homebrew packaging helper script:
+
+```bash
+scripts/release_to_brew.sh --help
+```
+
 ## Project Status and Layout
 
 Active implementation:
