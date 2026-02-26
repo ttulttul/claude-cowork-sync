@@ -33,7 +33,7 @@ struct ContentView: View {
                 sectionCard("Workflow Setup") {
                     inputRow(
                         title: "Repository Root",
-                        hint: "Set this to the repo containing pyproject.toml so uv can resolve cowork-merge."
+                        hint: "Set this to the deprecated python/ directory that contains pyproject.toml."
                     ) {
                         pathInput(
                             text: workspaceBinding(for: \.workspacePath),

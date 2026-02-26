@@ -7,7 +7,7 @@ Offline tooling for merging two Claude Desktop profiles on macOS, with Cowork se
 The following command fetches the remote Claude Cowork state, merging it with Cowork on your local Mac, safely checking to make sure nothing on your local Mac is overwritten that should not be:
 
 ```bash
-uv run cowork-merge merge \
+cargo run -- merge \
   --merge-from "user@remote-mac" \
   --apply
 ```
@@ -25,39 +25,33 @@ Chromium LocalStorage/IndexedDB use LevelDB LSM internals (`MANIFEST`, `*.ldb`, 
 
 ## Install / run
 
-This repo is managed with `uv`.
+Primary CLI/runtime is now Rust at repo root.
 
 ```bash
-uv run cowork-merge --help
-```
-
-Rust version (in subdirectory):
-
-```bash
-cargo run --manifest-path rust-sync/Cargo.toml -- --help
-```
-
-Run tests:
-
-```bash
-uv run pytest
-```
-
-Run Swift GUI tests:
-
-```bash
-swift test --package-path swift-gui
+cargo run -- --help
 ```
 
 Run Rust tests:
 
 ```bash
-cargo test --manifest-path rust-sync/Cargo.toml
+cargo test
 ```
 
-## Rust CLI (subdirectory: `rust-sync/`)
+Run legacy Python tests:
 
-The repository now includes a Rust CLI implementation at `rust-sync/`.
+```bash
+uv run --project python pytest
+```
+
+Run legacy Swift GUI tests:
+
+```bash
+swift test --package-path python/swift-gui
+```
+
+## Rust CLI (root crate)
+
+The repository now includes a Rust CLI implementation at repo root.
 
 Current Rust command coverage:
 - `merge`
@@ -68,7 +62,7 @@ Current Rust command coverage:
 Rust quick start (filesystem sync path):
 
 ```bash
-cargo run --manifest-path rust-sync/Cargo.toml -- merge \
+cargo run -- merge \
   --merge-from "user@remote-mac" \
   --skip-browser-state \
   --apply
@@ -96,9 +90,15 @@ Rust browser-state behavior:
 - Rust session merge now parallelizes per-file secondary-tree reconciliation within each session (for `uploads/`, `outputs/`, and `.claude/` payload files), not just per-session.
 - Rust secondary-file merge now uses metadata-first short-circuits (size/inode/mtime) to avoid unnecessary full-file hashing on unchanged or obviously-different files.
 
+## Legacy Python + Swift GUI (Deprecated)
+
+- Deprecated Python CLI and tests now live under `python/`.
+- Deprecated Swift GUI now lives under `python/swift-gui/`.
+- Prefer using the Rust CLI at repo root for all active development.
+
 ## Swift GUI app (macOS)
 
-This repository now includes a native SwiftUI app at `swift-gui/` that wraps the existing Python CLI.
+This repository now includes a native SwiftUI app at `python/swift-gui/` that wraps the legacy Python CLI.
 The GUI builds CLI arguments and runs:
 
 ```bash
@@ -108,14 +108,14 @@ uv run cowork-merge --log-level <LEVEL> merge ...
 Run the GUI from source:
 
 ```bash
-swift run --package-path swift-gui CoworkMergeApp
+swift run --package-path python/swift-gui CoworkMergeApp
 ```
 
 When launching from Terminal with `swift run`, the app now auto-activates and takes keyboard focus on startup.
 
 Inside the app:
 
-- Set `Repository Root` to this repo path so `uv run cowork-merge ...` can resolve `pyproject.toml`.
+- Set `Repository Root` to the `python/` directory so `uv run cowork-merge ...` can resolve `pyproject.toml`.
 - Choose a secondary source type (`Local Profile B` or `Remote Host`); the UI clears incompatible fields automatically.
 - Use progressive disclosure for advanced and manual browser-state options to keep routine merges focused.
 - Validate before run with inline error sections and use the command preview pane to verify exact CLI arguments.
@@ -211,7 +211,7 @@ Before applying, it performs a case-sensitive process check for `Claude` and abo
 ### Merge profiles
 
 ```bash
-uv run cowork-merge merge \
+cargo run -- merge \
   --profile-a "/path/to/profile_a" \
   --profile-b "/path/to/profile_b" \
   --output-profile "/path/to/merged_profile" \
@@ -223,7 +223,7 @@ uv run cowork-merge merge \
 ### Merge from remote host (common path)
 
 ```bash
-uv run cowork-merge merge \
+cargo run -- merge \
   --merge-from "user@remote-mac"
 ```
 
@@ -242,7 +242,7 @@ This mode:
 To merge and immediately apply to your local live profile:
 
 ```bash
-uv run cowork-merge merge \
+cargo run -- merge \
   --merge-from "user@remote-mac" \
   --apply
 ```
@@ -267,7 +267,7 @@ Options:
 - `--skip-indexeddb`: merge LocalStorage but skip IndexedDB.
 - `--base-source {a|b}`: base profile for unknown localStorage keys.
 - `--parallel-remote <N>`: cap remote parallelism used for incremental remote hash scans.
-- `--parallel-local <N>`: cap local parallelism used for incremental diff hash checks.
+- `--parallel-local <N>`: cap local parallelism used for incremental diff hashing and session merge work.
 - `--hash-algorithm {sha256|sha1}`: choose local+remote hash algorithm for incremental diffing.
 - `--log-level {DEBUG|INFO|WARNING|ERROR}`: CLI log verbosity.
   - Default is `WARNING`.
@@ -290,10 +290,6 @@ Options:
   - Local `vm_bundles` are always preserved in output.
 - `--include-cache-dirs`: include non-essential cache directories during remote fetch + base copy.
   - Default behavior excludes common cache directories (for example `Cache`, `Code Cache`, `GPUCache`, and service worker caches).
-- `--parallel-remote <N>`: set max remote parallelism for session hash computation.
-  - Default uses remote CPU core count.
-- `--parallel-local <N>`: set max local parallelism budget for merge operations.
-  - Currently reserved for upcoming local parallel stages.
 - `--auto-export-browser-state`: export browser state JSONs automatically when not provided.
 - `--headless-browser-state` / `--no-headless-browser-state`: control headless Playwright mode for auto-export/import.
   - Default is headless mode enabled.
@@ -302,11 +298,10 @@ Progress rendering can be disabled with environment variable `COWORK_MERGE_PROGR
 
 When output is a TTY, final merge results are shown as a colorful summary instead of raw JSON.
 
-If Playwright is missing and you want browser-state merge:
+If Playwright Chromium is missing and you want browser-state merge:
 
 ```bash
-uv add --dev playwright
-uv run playwright install chromium
+npx playwright@1.56.1 install chromium
 ```
 
 If you intentionally want filesystem-only merge, use `--skip-browser-state`.
@@ -314,7 +309,7 @@ If you intentionally want filesystem-only merge, use `--skip-browser-state`.
 ### Export browser state (Playwright)
 
 ```bash
-uv run cowork-merge export-browser-state \
+cargo run -- export-browser-state \
   --profile "/path/to/profile_a" \
   --output "/path/to/state_a.json"
 ```
@@ -322,7 +317,7 @@ uv run cowork-merge export-browser-state \
 ### Import browser state (Playwright)
 
 ```bash
-uv run cowork-merge import-browser-state \
+cargo run -- import-browser-state \
   --profile "/path/to/merged_profile" \
   --input "/path/to/merged_state.json" \
   --replace-local-storage
@@ -331,7 +326,7 @@ uv run cowork-merge import-browser-state \
 ### Atomic deploy
 
 ```bash
-uv run cowork-merge deploy \
+cargo run -- deploy \
   --live-profile "/Users/ksimpson/Library/Application Support/Claude" \
   --merged-profile "/path/to/merged_profile" \
   --backup-parent "/path/to/backups"

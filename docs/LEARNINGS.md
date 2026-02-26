@@ -60,3 +60,4 @@
 - Terminal overwrite padding must be based on visible character width (ANSI-stripped), not raw string byte length, otherwise colorized status transitions can leave stale trailing characters on reused lines.
 - Session-level parallelism alone can still bottleneck when a few sessions contain many payload files; adding per-file parallel reconciliation inside each session improves utilization for skewed workloads.
 - In secondary payload reconciliation, checking metadata first (size mismatch => different, shared inode/mtime match => equal) avoids many expensive full-hash comparisons while preserving deterministic conflict naming.
+- Repository layout now centers Rust at root (`Cargo.toml` + `src/`) while moving the legacy Python CLI and Swift GUI under `python/` with explicit deprecation markers to reduce ambiguity about the active implementation.
