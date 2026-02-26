@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use log::debug;
 use serde_json::{Map, Value};
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
 pub fn ensure_parent(path: &Path) -> Result<()> {
@@ -93,8 +94,31 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     Ok(hex::encode(digest.finalize()))
 }
 
+pub fn sha1_file(path: &Path) -> Result<String> {
+    let mut file =
+        File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let mut digest = Sha1::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
 pub fn sha256_text(text: &str) -> String {
     let mut digest = Sha256::new();
+    digest.update(text.as_bytes());
+    hex::encode(digest.finalize())
+}
+
+pub fn sha1_text(text: &str) -> String {
+    let mut digest = Sha1::new();
     digest.update(text.as_bytes());
     hex::encode(digest.finalize())
 }

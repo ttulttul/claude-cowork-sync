@@ -11,7 +11,7 @@ use regex::Regex;
 use which::which;
 
 use crate::progress::{format_bytes, ProgressColor, TerminalProgress};
-use crate::utils::{sha256_file, sha256_text};
+use crate::utils::{sha1_file, sha256_file, sha256_text};
 
 #[derive(Debug, Default)]
 struct BaseSyncPlan {
@@ -24,6 +24,36 @@ struct BaseSyncPlan {
 struct SessionSyncPlan {
     transfer_entries: Vec<(String, String)>,
     seed_from_cache_entries: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashAlgorithm {
+    Sha256,
+    Sha1,
+}
+
+impl HashAlgorithm {
+    pub fn parse(raw: &str) -> Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "sha256" => Ok(Self::Sha256),
+            "sha1" => Ok(Self::Sha1),
+            _ => bail!("Unsupported hash algorithm: {raw}"),
+        }
+    }
+
+    pub fn as_name(self) -> &'static str {
+        match self {
+            Self::Sha256 => "sha256",
+            Self::Sha1 => "sha1",
+        }
+    }
+
+    fn shasum_bits(self) -> &'static str {
+        match self {
+            Self::Sha256 => "256",
+            Self::Sha1 => "1",
+        }
+    }
 }
 
 const NON_ESSENTIAL_CACHE_DIRS: [&str; 9] = [
@@ -66,6 +96,7 @@ pub fn fetch_remote_profile(
     include_vm_bundles: bool,
     baseline_profile: Option<&Path>,
     include_cache_dirs: bool,
+    hash_algorithm: HashAlgorithm,
     parallel_remote: Option<usize>,
     parallel_local: usize,
 ) -> Result<PathBuf> {
@@ -94,6 +125,7 @@ pub fn fetch_remote_profile(
                 &target_root,
                 baseline,
                 include_cache_dirs,
+                hash_algorithm,
                 parallel_remote,
                 parallel_local,
             )?;
@@ -146,6 +178,7 @@ fn fetch_remote_profile_incremental(
     target_root: &Path,
     baseline_profile: &Path,
     include_cache_dirs: bool,
+    hash_algorithm: HashAlgorithm,
     parallel_remote: Option<usize>,
     parallel_local: usize,
 ) -> Result<()> {
@@ -175,6 +208,7 @@ fn fetch_remote_profile_incremental(
         remote_profile_path,
         include_vm_bundles,
         include_cache_dirs,
+        hash_algorithm,
         parallel_remote,
     )?;
 
@@ -192,6 +226,7 @@ fn fetch_remote_profile_incremental(
         &remote_base_hashes,
         baseline_profile,
         &base_cache_root,
+        hash_algorithm,
         parallel_local,
         Some(&mut base_diff_progress),
     );
@@ -242,8 +277,12 @@ fn fetch_remote_profile_incremental(
         &base_plan,
     )?;
 
-    let remote_hashes =
-        list_remote_session_json_hashes(remote_host, remote_profile_path, parallel_remote)?;
+    let remote_hashes = list_remote_session_json_hashes(
+        remote_host,
+        remote_profile_path,
+        hash_algorithm,
+        parallel_remote,
+    )?;
     let session_cache_root = resolve_remote_session_cache_path(remote_host, remote_profile_path)?;
     fs::create_dir_all(&session_cache_root).with_context(|| {
         format!(
@@ -266,6 +305,7 @@ fn fetch_remote_profile_incremental(
         &remote_hashes,
         baseline_profile,
         &session_cache_root,
+        hash_algorithm,
         parallel_local,
         Some(&mut session_diff_progress),
     );
@@ -442,22 +482,26 @@ fn build_remote_tar_from_path_list_command(remote_profile_path: &str) -> Result<
     ))
 }
 
-fn build_remote_session_hash_command(remote_profile_path: &str) -> Result<String> {
+fn build_remote_session_hash_command(
+    remote_profile_path: &str,
+    hash_algorithm: HashAlgorithm,
+) -> Result<String> {
     let profile_expr = remote_path_expression(remote_profile_path)?;
     Ok(format!(
         "PROFILE_PATH={profile_expr}; if [ ! -d \"$PROFILE_PATH\" ]; then echo \"Remote profile directory does not exist: $PROFILE_PATH\" 1>&2; exit 3; fi; cd \"$PROFILE_PATH\"; if [ ! -d \"local-agent-mode-sessions\" ]; then exit 0; fi; if command -v nproc >/dev/null 2>&1; then PARALLELISM=\"$(nproc)\"; elif command -v sysctl >/dev/null 2>&1; then PARALLELISM=\"$(sysctl -n hw.ncpu 2>/dev/null || echo 1)\"; else PARALLELISM=\"1\"; fi; if [ \"$PARALLELISM\" -lt 1 ] 2>/dev/null; then PARALLELISM=1; fi; {}",
-        build_remote_hash_xargs_pipeline("\"$PARALLELISM\"")
+        build_remote_hash_xargs_pipeline("\"$PARALLELISM\"", hash_algorithm)
     ))
 }
 
 fn build_remote_session_hash_command_with_parallel(
     remote_profile_path: &str,
     parallel_remote: usize,
+    hash_algorithm: HashAlgorithm,
 ) -> Result<String> {
     let profile_expr = remote_path_expression(remote_profile_path)?;
     Ok(format!(
         "PROFILE_PATH={profile_expr}; if [ ! -d \"$PROFILE_PATH\" ]; then echo \"Remote profile directory does not exist: $PROFILE_PATH\" 1>&2; exit 3; fi; PARALLELISM={parallel_remote}; if [ \"$PARALLELISM\" -lt 1 ] 2>/dev/null; then PARALLELISM=1; fi; cd \"$PROFILE_PATH\"; if [ ! -d \"local-agent-mode-sessions\" ]; then exit 0; fi; {}",
-        build_remote_hash_xargs_pipeline("\"$PARALLELISM\"")
+        build_remote_hash_xargs_pipeline("\"$PARALLELISM\"", hash_algorithm)
     ))
 }
 
@@ -465,6 +509,7 @@ fn build_remote_non_session_hash_command(
     remote_profile_path: &str,
     include_vm_bundles: bool,
     include_cache_dirs: bool,
+    hash_algorithm: HashAlgorithm,
     parallel_remote: Option<usize>,
 ) -> Result<String> {
     let profile_expr = remote_path_expression(remote_profile_path)?;
@@ -486,13 +531,18 @@ fn build_remote_non_session_hash_command(
     };
 
     Ok(format!(
-        "PROFILE_PATH={profile_expr}; if [ ! -d \"$PROFILE_PATH\" ]; then echo \"Remote profile directory does not exist: $PROFILE_PATH\" 1>&2; exit 3; fi; {parallelism_block}if [ \"$PARALLELISM\" -lt 1 ] 2>/dev/null; then PARALLELISM=1; fi; cd \"$PROFILE_PATH\"; {find_expr} | xargs -0 -n 1 -P \"$PARALLELISM\" -I {{}} sh -c 'file=\"$1\"; hash=\"$(shasum -a 256 \"$file\" | cut -d \" \" -f 1)\"; clean=\"${{file#./}}\"; printf \"%s\\t%s\\n\" \"$clean\" \"$hash\"' _ {{}}"
+        "PROFILE_PATH={profile_expr}; if [ ! -d \"$PROFILE_PATH\" ]; then echo \"Remote profile directory does not exist: $PROFILE_PATH\" 1>&2; exit 3; fi; {parallelism_block}if [ \"$PARALLELISM\" -lt 1 ] 2>/dev/null; then PARALLELISM=1; fi; cd \"$PROFILE_PATH\"; {find_expr} | xargs -0 -n 1 -P \"$PARALLELISM\" -I {{}} sh -c 'file=\"$1\"; hash=\"$(shasum -a {} \"$file\" | cut -d \" \" -f 1)\"; clean=\"${{file#./}}\"; printf \"%s\\t%s\\n\" \"$clean\" \"$hash\"' _ {{}}",
+        hash_algorithm.shasum_bits()
     ))
 }
 
-fn build_remote_hash_xargs_pipeline(parallelism_expr: &str) -> String {
+fn build_remote_hash_xargs_pipeline(
+    parallelism_expr: &str,
+    hash_algorithm: HashAlgorithm,
+) -> String {
     format!(
-        "find local-agent-mode-sessions -type f -name 'local_*.json' -print0 | xargs -0 -n 1 -P {parallelism_expr} -I {{}} sh -c 'file=\"$1\"; hash=\"$(shasum -a 256 \"$file\" | cut -d \" \" -f 1)\"; printf \"%s\\t%s\\n\" \"$file\" \"$hash\"' _ {{}}"
+        "find local-agent-mode-sessions -type f -name 'local_*.json' -print0 | xargs -0 -n 1 -P {parallelism_expr} -I {{}} sh -c 'file=\"$1\"; hash=\"$(shasum -a {} \"$file\" | cut -d \" \" -f 1)\"; printf \"%s\\t%s\\n\" \"$file\" \"$hash\"' _ {{}}",
+        hash_algorithm.shasum_bits()
     )
 }
 
@@ -519,6 +569,7 @@ fn build_prune_paths(
 fn list_remote_session_json_hashes(
     remote_host: &str,
     remote_profile_path: &str,
+    hash_algorithm: HashAlgorithm,
     parallel_remote: Option<usize>,
 ) -> Result<HashMap<String, String>> {
     if let Some(value) = parallel_remote {
@@ -530,14 +581,22 @@ fn list_remote_session_json_hashes(
     let command = match parallel_remote {
         Some(value) => {
             info!(
-                "Computing remote session hashes with explicit parallelism={}",
-                value
+                "Computing remote session hashes with explicit parallelism={} hash_algorithm={}",
+                value,
+                hash_algorithm.as_name()
             );
-            build_remote_session_hash_command_with_parallel(remote_profile_path, value)?
+            build_remote_session_hash_command_with_parallel(
+                remote_profile_path,
+                value,
+                hash_algorithm,
+            )?
         }
         None => {
-            info!("Computing remote session hashes with remote CPU-count parallelism");
-            build_remote_session_hash_command(remote_profile_path)?
+            info!(
+                "Computing remote session hashes with remote CPU-count parallelism hash_algorithm={}",
+                hash_algorithm.as_name()
+            );
+            build_remote_session_hash_command(remote_profile_path, hash_algorithm)?
         }
     };
 
@@ -562,6 +621,7 @@ fn list_remote_non_session_file_hashes(
     remote_profile_path: &str,
     include_vm_bundles: bool,
     include_cache_dirs: bool,
+    hash_algorithm: HashAlgorithm,
     parallel_remote: Option<usize>,
 ) -> Result<HashMap<String, String>> {
     if let Some(value) = parallel_remote {
@@ -574,6 +634,7 @@ fn list_remote_non_session_file_hashes(
         remote_profile_path,
         include_vm_bundles,
         include_cache_dirs,
+        hash_algorithm,
         parallel_remote,
     )?;
 
@@ -622,7 +683,14 @@ fn paths_to_transfer_for_remote_sessions(
     progress: Option<&mut TerminalProgress>,
 ) -> Vec<String> {
     let cache_root = baseline_profile.join(".__cowork_missing_session_cache__");
-    let plan = plan_remote_session_sync(remote_hashes, baseline_profile, &cache_root, 1, progress);
+    let plan = plan_remote_session_sync(
+        remote_hashes,
+        baseline_profile,
+        &cache_root,
+        HashAlgorithm::Sha256,
+        1,
+        progress,
+    );
     session_entries_to_path_list(&plan.transfer_entries)
 }
 
@@ -630,6 +698,7 @@ fn plan_remote_session_sync(
     remote_hashes: &HashMap<String, String>,
     baseline_profile: &Path,
     session_cache_root: &Path,
+    hash_algorithm: HashAlgorithm,
     parallel_local: usize,
     mut progress: Option<&mut TerminalProgress>,
 ) -> SessionSyncPlan {
@@ -659,12 +728,13 @@ fn plan_remote_session_sync(
                     .map(String::as_str)
                     .unwrap_or_default();
                 let local_json = baseline_profile.join(relative_json);
-                if should_transfer_remote_session_json(&local_json, remote_hash) {
+                if should_transfer_remote_session_json(&local_json, remote_hash, hash_algorithm) {
                     if session_cache_has_entry(
                         session_cache_root,
                         relative_json,
                         &session_folder,
                         remote_hash,
+                        hash_algorithm,
                     ) {
                         SessionDecision::SeedFromCache((relative_json.clone(), session_folder))
                     } else {
@@ -714,8 +784,9 @@ fn session_cache_has_entry(
     json_path: &str,
     folder_path: &str,
     remote_hash: &str,
+    hash_algorithm: HashAlgorithm,
 ) -> bool {
-    local_file_matches_hash(&cache_root.join(json_path), remote_hash)
+    local_file_matches_hash(&cache_root.join(json_path), remote_hash, hash_algorithm)
         && cache_root.join(folder_path).is_dir()
 }
 
@@ -723,6 +794,7 @@ fn plan_remote_base_sync(
     remote_hashes: &HashMap<String, String>,
     baseline_profile: &Path,
     base_cache_root: &Path,
+    hash_algorithm: HashAlgorithm,
     parallel_local: usize,
     mut progress: Option<&mut TerminalProgress>,
 ) -> BaseSyncPlan {
@@ -747,10 +819,17 @@ fn plan_remote_base_sync(
                     .get(relative_path)
                     .map(String::as_str)
                     .unwrap_or_default();
-                if local_file_matches_hash(&baseline_profile.join(relative_path), remote_hash) {
+                if local_file_matches_hash(
+                    &baseline_profile.join(relative_path),
+                    remote_hash,
+                    hash_algorithm,
+                ) {
                     BaseDecision::SeedFromBaseline(relative_path.clone())
-                } else if local_file_matches_hash(&base_cache_root.join(relative_path), remote_hash)
-                {
+                } else if local_file_matches_hash(
+                    &base_cache_root.join(relative_path),
+                    remote_hash,
+                    hash_algorithm,
+                ) {
                     BaseDecision::SeedFromCache(relative_path.clone())
                 } else {
                     BaseDecision::Transfer(relative_path.clone())
@@ -790,17 +869,32 @@ fn build_local_hash_pool(parallel_local: usize) -> rayon::ThreadPool {
         .expect("local hash thread pool should build")
 }
 
-fn should_transfer_remote_session_json(local_json: &Path, remote_hash: &str) -> bool {
-    !local_file_matches_hash(local_json, remote_hash)
+fn should_transfer_remote_session_json(
+    local_json: &Path,
+    remote_hash: &str,
+    hash_algorithm: HashAlgorithm,
+) -> bool {
+    !local_file_matches_hash(local_json, remote_hash, hash_algorithm)
 }
 
-fn local_file_matches_hash(local_file: &Path, remote_hash: &str) -> bool {
+fn local_file_matches_hash(
+    local_file: &Path,
+    remote_hash: &str,
+    hash_algorithm: HashAlgorithm,
+) -> bool {
     if !local_file.exists() {
         return false;
     }
-    match sha256_file(local_file) {
+    match hash_file_with_algorithm(local_file, hash_algorithm) {
         Ok(local_hash) => local_hash == remote_hash,
         Err(_) => false,
+    }
+}
+
+fn hash_file_with_algorithm(local_file: &Path, hash_algorithm: HashAlgorithm) -> Result<String> {
+    match hash_algorithm {
+        HashAlgorithm::Sha256 => sha256_file(local_file),
+        HashAlgorithm::Sha1 => sha1_file(local_file),
     }
 }
 
@@ -1237,12 +1331,12 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::utils::sha256_text;
+    use crate::utils::{sha1_text, sha256_text};
 
     use super::{
         build_remote_session_hash_command, build_remote_session_hash_command_with_parallel,
         build_remote_tar_command, paths_to_transfer_for_remote_sessions, plan_remote_base_sync,
-        plan_remote_session_sync, should_transfer_remote_session_json,
+        plan_remote_session_sync, should_transfer_remote_session_json, HashAlgorithm,
     };
 
     #[test]
@@ -1285,11 +1379,15 @@ mod tests {
 
     #[test]
     fn build_remote_session_hash_command_defaults_to_remote_cores() {
-        let command = build_remote_session_hash_command("Library/Application Support/Claude")
-            .expect("command should build");
+        let command = build_remote_session_hash_command(
+            "Library/Application Support/Claude",
+            HashAlgorithm::Sha256,
+        )
+        .expect("command should build");
         assert!(command.contains("command -v nproc"));
         assert!(command.contains("sysctl -n hw.ncpu"));
         assert!(command.contains("xargs -0 -n 1 -P \"$PARALLELISM\""));
+        assert!(command.contains("shasum -a 256"));
     }
 
     #[test]
@@ -1297,10 +1395,22 @@ mod tests {
         let command = build_remote_session_hash_command_with_parallel(
             "Library/Application Support/Claude",
             7,
+            HashAlgorithm::Sha256,
         )
         .expect("command should build");
         assert!(command.contains("PARALLELISM=7"));
         assert!(command.contains("xargs -0 -n 1 -P \"$PARALLELISM\""));
+        assert!(command.contains("shasum -a 256"));
+    }
+
+    #[test]
+    fn build_remote_session_hash_command_supports_sha1() {
+        let command = build_remote_session_hash_command(
+            "Library/Application Support/Claude",
+            HashAlgorithm::Sha1,
+        )
+        .expect("command should build");
+        assert!(command.contains("shasum -a 1"));
     }
 
     #[test]
@@ -1358,7 +1468,13 @@ mod tests {
         fs::write(&local_json, "same").expect("write local json");
         assert!(!should_transfer_remote_session_json(
             &local_json,
-            &sha256_text("same")
+            &sha256_text("same"),
+            HashAlgorithm::Sha256,
+        ));
+        assert!(!should_transfer_remote_session_json(
+            &local_json,
+            &sha1_text("same"),
+            HashAlgorithm::Sha1,
         ));
     }
 
@@ -1402,7 +1518,8 @@ mod tests {
             ),
         ]);
 
-        let plan = plan_remote_base_sync(&hashes, &baseline, &cache, 1, None);
+        let plan =
+            plan_remote_base_sync(&hashes, &baseline, &cache, HashAlgorithm::Sha256, 1, None);
 
         assert_eq!(plan.seed_from_baseline.len(), 1);
         assert_eq!(plan.seed_from_cache.len(), 1);
@@ -1462,7 +1579,8 @@ mod tests {
             ),
         ]);
 
-        let plan = plan_remote_session_sync(&hashes, &baseline, &cache, 1, None);
+        let plan =
+            plan_remote_session_sync(&hashes, &baseline, &cache, HashAlgorithm::Sha256, 1, None);
 
         assert_eq!(plan.seed_from_cache_entries.len(), 1);
         assert_eq!(plan.transfer_entries.len(), 1);

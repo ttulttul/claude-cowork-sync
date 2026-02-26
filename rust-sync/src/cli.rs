@@ -17,7 +17,7 @@ use crate::browser_storage::{
 use crate::deploy::atomic_swap_profile;
 use crate::merge_engine::{merge_profiles, MergeOptions, MergeSummary};
 use crate::progress::{run_with_spinner_result, ProgressColor};
-use crate::remote_profile::fetch_remote_profile;
+use crate::remote_profile::{fetch_remote_profile, HashAlgorithm};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -97,6 +97,13 @@ struct MergeArgs {
     include_vm_bundles: bool,
     #[arg(long = "include-cache-dirs", action = ArgAction::SetTrue)]
     include_cache_dirs: bool,
+    #[arg(
+        long = "hash-algorithm",
+        default_value = "sha256",
+        value_parser = ["sha256", "sha1"],
+        help = "Hash algorithm for local+remote incremental diffing."
+    )]
+    hash_algorithm: String,
     #[arg(
         long = "parallel-remote",
         value_parser = parse_positive_usize,
@@ -405,6 +412,7 @@ fn resolve_profile_b(
     }
 
     if let Some(remote_host) = &args.merge_from {
+        let hash_algorithm = HashAlgorithm::parse(&args.hash_algorithm)?;
         let tempdir = tempfile::tempdir()
             .with_context(|| "Failed to create temporary directory for remote profile")?;
         let fetched = fetch_remote_profile(
@@ -414,6 +422,7 @@ fn resolve_profile_b(
             args.include_vm_bundles,
             Some(profile_a),
             args.include_cache_dirs,
+            hash_algorithm,
             args.parallel_remote,
             args.parallel_local,
         )?;
@@ -734,6 +743,7 @@ mod tests {
             skip_indexeddb: false,
             include_vm_bundles: false,
             include_cache_dirs: false,
+            hash_algorithm: "sha256".to_string(),
             parallel_remote: None,
             parallel_local: default_local_parallelism(),
             apply: false,
