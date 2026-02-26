@@ -51,7 +51,7 @@ cargo run -- merge \
   --apply
 ```
 
-Direct Playwright bridge commands:
+Direct Playwright commands:
 
 ```bash
 cargo run -- export-browser-state \
@@ -70,5 +70,7 @@ cargo run -- import-browser-state \
 ```
 
 Notes:
-- The Rust Playwright integration uses `uv run cowork-merge ...` under the hood for browser export/import.
+- Browser export/import is implemented in native Rust using `playwright-rs` (no Python bridge).
 - `--no-headless-browser-state` disables headless mode for merge auto-export/apply import.
+- Install Chromium runtime for Playwright before using browser export/import:
+  - `npx playwright@1.56.1 install chromium`

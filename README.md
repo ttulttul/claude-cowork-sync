@@ -75,11 +75,13 @@ cargo run --manifest-path rust-sync/Cargo.toml -- merge \
 ```
 
 Rust browser-state behavior:
-- Supports Playwright export/import through the existing Python Playwright runtime via `uv`.
+- Supports native Rust Playwright export/import (no Python bridge).
 - Supports automatic Playwright export during merge:
   - `--auto-export-browser-state` (also auto-enabled for `--merge-from` when browser-state paths are not provided)
 - Supports Playwright import during `merge --apply` when browser-state merge is enabled.
 - Headless browser-state mode is enabled by default and can be disabled with `--no-headless-browser-state`.
+- Install Playwright Chromium for Rust CLI usage:
+  - `npx playwright@1.56.1 install chromium`
 
 ## Swift GUI app (macOS)
 

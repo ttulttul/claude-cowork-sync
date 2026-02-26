@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use log::warn;
+use log::{info, warn};
+use playwright_rs::protocol::{BrowserContextOptions, Playwright};
+use playwright_rs::PLAYWRIGHT_VERSION;
 use regex::Regex;
 use serde_json::Value;
 
@@ -67,6 +70,235 @@ pub fn merge_browser_states(
         local_storage,
         indexed_db,
     }
+}
+
+pub fn ensure_playwright_available() -> Result<()> {
+    info!("Checking Playwright runtime availability");
+    run_in_tokio_runtime(async {
+        let playwright = Playwright::launch()
+            .await
+            .with_context(|| "Failed to initialize Playwright runtime")?;
+        let browser = playwright.chromium().launch().await.with_context(|| {
+            format!(
+                "Failed to launch Playwright Chromium runtime. Install with `npx playwright@{} install chromium`.",
+                PLAYWRIGHT_VERSION
+            )
+        })?;
+        browser
+            .close()
+            .await
+            .with_context(|| "Failed to close Playwright availability-check browser")?;
+        Ok(())
+    })
+}
+
+pub fn export_browser_state_with_playwright(
+    profile_dir: &Path,
+    output_path: &Path,
+    origin: &str,
+    headless: bool,
+) -> Result<BrowserStateExport> {
+    info!(
+        "Exporting browser state with native Rust Playwright for {}",
+        profile_dir.display()
+    );
+    let profile = profile_dir.to_path_buf();
+    let origin_owned = origin.to_string();
+    let (local_storage, indexed_db) = run_in_tokio_runtime(async move {
+        run_playwright_export(&profile, &origin_owned, headless).await
+    })?;
+
+    let state = BrowserStateExport {
+        schema_version: "1".to_string(),
+        origin: origin.to_string(),
+        exported_at: Utc::now().timestamp_millis(),
+        local_storage,
+        indexed_db,
+    };
+    write_browser_state(output_path, &state)?;
+    Ok(state)
+}
+
+pub fn import_browser_state_with_playwright(
+    profile_dir: &Path,
+    browser_state: &BrowserStateExport,
+    headless: bool,
+    replace_local_storage: bool,
+) -> Result<()> {
+    info!(
+        "Importing browser state with native Rust Playwright into {}",
+        profile_dir.display()
+    );
+    let profile = profile_dir.to_path_buf();
+    let state = browser_state.clone();
+    run_in_tokio_runtime(async move {
+        run_playwright_import(&profile, &state, headless, replace_local_storage).await
+    })
+}
+
+async fn run_playwright_export(
+    profile_dir: &Path,
+    origin: &str,
+    headless: bool,
+) -> Result<(
+    HashMap<String, String>,
+    HashMap<String, Vec<IndexedDbRecord>>,
+)> {
+    let user_data_dir = profile_dir
+        .to_str()
+        .with_context(|| format!("Non-UTF8 profile path: {}", profile_dir.display()))?;
+
+    let playwright = Playwright::launch()
+        .await
+        .with_context(|| "Failed to initialize Playwright runtime")?;
+    let options = BrowserContextOptions::builder().headless(headless).build();
+    let context = playwright
+        .chromium()
+        .launch_persistent_context_with_options(user_data_dir, options)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to launch persistent Chromium context. Install browsers with `npx playwright@{} install chromium`.",
+                PLAYWRIGHT_VERSION
+            )
+        })?;
+
+    let page = context
+        .new_page()
+        .await
+        .with_context(|| "Failed to create Playwright page for export")?;
+    page.goto(origin, None)
+        .await
+        .with_context(|| format!("Failed to navigate to {} for browser-state export", origin))?;
+
+    let local_storage: HashMap<String, String> = page
+        .evaluate(LOCAL_STORAGE_EXPORT_SCRIPT, None::<&()>)
+        .await
+        .with_context(|| "Playwright localStorage export returned invalid payload")?;
+    let indexed_db_raw: Value = page
+        .evaluate(INDEXEDDB_EXPORT_SCRIPT, None::<&()>)
+        .await
+        .with_context(|| "Playwright IndexedDB export returned invalid payload")?;
+
+    context
+        .close()
+        .await
+        .with_context(|| "Failed to close Playwright export context")?;
+
+    let indexed_db = validate_indexeddb_export(indexed_db_raw);
+    Ok((local_storage, indexed_db))
+}
+
+async fn run_playwright_import(
+    profile_dir: &Path,
+    browser_state: &BrowserStateExport,
+    headless: bool,
+    replace_local_storage: bool,
+) -> Result<()> {
+    let user_data_dir = profile_dir
+        .to_str()
+        .with_context(|| format!("Non-UTF8 profile path: {}", profile_dir.display()))?;
+
+    let playwright = Playwright::launch()
+        .await
+        .with_context(|| "Failed to initialize Playwright runtime")?;
+    let options = BrowserContextOptions::builder().headless(headless).build();
+    let context = playwright
+        .chromium()
+        .launch_persistent_context_with_options(user_data_dir, options)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to launch persistent Chromium context for import. Install browsers with `npx playwright@{} install chromium`.",
+                PLAYWRIGHT_VERSION
+            )
+        })?;
+
+    let page = context
+        .new_page()
+        .await
+        .with_context(|| "Failed to create Playwright page for import")?;
+    page.goto(&browser_state.origin, None)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to navigate to {} for browser-state import",
+                browser_state.origin
+            )
+        })?;
+
+    let local_storage_payload = serde_json::json!({
+        "values": browser_state.local_storage,
+        "replace": replace_local_storage,
+    });
+    let indexed_db_payload = indexeddb_dump(&browser_state.indexed_db);
+
+    let _: Value = page
+        .evaluate(LOCAL_STORAGE_IMPORT_SCRIPT, Some(&local_storage_payload))
+        .await
+        .with_context(|| "Failed to import localStorage via Playwright")?;
+    let _: Value = page
+        .evaluate(INDEXEDDB_IMPORT_SCRIPT, Some(&indexed_db_payload))
+        .await
+        .with_context(|| "Failed to import IndexedDB via Playwright")?;
+
+    context
+        .close()
+        .await
+        .with_context(|| "Failed to close Playwright import context")?;
+
+    Ok(())
+}
+
+fn validate_indexeddb_export(raw: Value) -> HashMap<String, Vec<IndexedDbRecord>> {
+    let Some(stores) = raw.as_object() else {
+        return HashMap::new();
+    };
+
+    let mut validated = HashMap::new();
+    for (store_name, rows) in stores {
+        let Some(row_values) = rows.as_array() else {
+            continue;
+        };
+        let mut records = Vec::new();
+        for row in row_values {
+            match serde_json::from_value::<IndexedDbRecord>(row.clone()) {
+                Ok(record) => records.push(record),
+                Err(error) => warn!(
+                    "Skipping malformed IndexedDB row in store {}: {}",
+                    store_name, error
+                ),
+            }
+        }
+        validated.insert(store_name.to_string(), records);
+    }
+
+    validated
+}
+
+fn indexeddb_dump(
+    indexed_db: &HashMap<String, Vec<IndexedDbRecord>>,
+) -> HashMap<String, Vec<Value>> {
+    let mut dumped = HashMap::new();
+    for (store, rows) in indexed_db {
+        let values = rows
+            .iter()
+            .filter_map(|row| serde_json::to_value(row).ok())
+            .collect::<Vec<_>>();
+        dumped.insert(store.clone(), values);
+    }
+    dumped
+}
+
+fn run_in_tokio_runtime<T, F>(future: F) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .with_context(|| "Failed to initialize tokio runtime for Playwright operation")?;
+    runtime.block_on(future)
 }
 
 fn merge_local_storage(
@@ -328,6 +560,110 @@ fn timestamp_from_value(value: &Value) -> Option<i64> {
     None
 }
 
+const LOCAL_STORAGE_EXPORT_SCRIPT: &str = r#"
+() => {
+  const data = {};
+  for (let i = 0; i < window.localStorage.length; i += 1) {
+    const key = window.localStorage.key(i);
+    data[key] = window.localStorage.getItem(key);
+  }
+  return data;
+}
+"#;
+
+const LOCAL_STORAGE_IMPORT_SCRIPT: &str = r#"
+({ values, replace }) => {
+  if (replace) {
+    window.localStorage.clear();
+  }
+  Object.entries(values).forEach(([key, value]) => {
+    window.localStorage.setItem(key, value);
+  });
+}
+"#;
+
+const INDEXEDDB_EXPORT_SCRIPT: &str = r#"
+async () => {
+  const output = {};
+  if (!indexedDB.databases) {
+    return output;
+  }
+  const dbs = await indexedDB.databases();
+  for (const dbInfo of dbs) {
+    if (!dbInfo.name) continue;
+    const dbName = dbInfo.name;
+    const db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open(dbName);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => resolve(req.result);
+    });
+    const stores = Array.from(db.objectStoreNames);
+    for (const storeName of stores) {
+      const key = `${dbName}::${storeName}`;
+      output[key] = await new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const store = tx.objectStore(storeName);
+        const rows = [];
+        const req = store.openCursor();
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) {
+            resolve(rows);
+            return;
+          }
+          rows.push({ key: cursor.key, value: cursor.value });
+          cursor.continue();
+        };
+      });
+    }
+    db.close();
+  }
+  return output;
+}
+"#;
+
+const INDEXEDDB_IMPORT_SCRIPT: &str = r#"
+async (stores) => {
+  const grouped = {};
+  Object.keys(stores).forEach((key) => {
+    const parts = key.split('::');
+    if (parts.length !== 2) return;
+    const [dbName, storeName] = parts;
+    grouped[dbName] = grouped[dbName] || {};
+    grouped[dbName][storeName] = stores[key];
+  });
+
+  const openDb = (dbName, storeNames) => new Promise((resolve, reject) => {
+    const req = indexedDB.open(dbName);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      storeNames.forEach((storeName) => {
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.createObjectStore(storeName);
+        }
+      });
+    };
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => resolve(req.result);
+  });
+
+  for (const [dbName, storesForDb] of Object.entries(grouped)) {
+    const db = await openDb(dbName, Object.keys(storesForDb));
+    for (const [storeName, rows] of Object.entries(storesForDb)) {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        rows.forEach((row) => store.put(row.value, row.key));
+        tx.onerror = () => reject(tx.error);
+        tx.oncomplete = () => resolve();
+      });
+    }
+    db.close();
+  }
+}
+"#;
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -336,7 +672,7 @@ mod tests {
 
     use crate::models::{BrowserStateExport, IndexedDbRecord, SessionBinding};
 
-    use super::merge_browser_states;
+    use super::{merge_browser_states, validate_indexeddb_export};
 
     #[test]
     fn merge_browser_states_applies_cowork_rules() {
@@ -378,11 +714,13 @@ mod tests {
                 ),
                 (
                     "local_shared:textInput".to_string(),
-                    serde_json::to_string(&json!({"updatedAt": 200, "value": "b"})).expect("json string"),
+                    serde_json::to_string(&json!({"updatedAt": 200, "value": "b"}))
+                        .expect("json string"),
                 ),
                 (
                     "local_new:files".to_string(),
-                    serde_json::to_string(&json!({"timestamp": 123, "value": "files"})).expect("json string"),
+                    serde_json::to_string(&json!({"timestamp": 123, "value": "files"}))
+                        .expect("json string"),
                 ),
                 ("other-key".to_string(), "B".to_string()),
             ]),
@@ -528,5 +866,21 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("insert")
         );
+    }
+
+    #[test]
+    fn validate_indexeddb_export_skips_malformed_rows() {
+        let raw = json!({
+            "db::store": [
+                {"key": "k1", "value": {"x": 1}},
+                {"key": "k2"}
+            ],
+            "db::not-array": "x"
+        });
+
+        let validated = validate_indexeddb_export(raw);
+        let store = validated.get("db::store").expect("store exists");
+        assert_eq!(store.len(), 1);
+        assert_eq!(store[0].key, json!("k1"));
     }
 }

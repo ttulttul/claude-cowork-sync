@@ -10,12 +10,12 @@ use regex::Regex;
 use serde::Serialize;
 use tempfile::TempDir;
 
+use crate::browser_storage::{
+    ensure_playwright_available, export_browser_state_with_playwright,
+    import_browser_state_with_playwright, read_browser_state,
+};
 use crate::deploy::atomic_swap_profile;
 use crate::merge_engine::{merge_profiles, MergeOptions, MergeSummary};
-use crate::playwright_bridge::{
-    ensure_playwright_available, export_browser_state_with_playwright,
-    import_browser_state_with_playwright,
-};
 use crate::remote_profile::fetch_remote_profile;
 
 #[derive(Debug, Parser)]
@@ -38,9 +38,9 @@ struct Cli {
 enum Commands {
     #[command(about = "Merge two profile directories into one output profile.")]
     Merge(MergeArgs),
-    #[command(about = "Export logical browser storage via Playwright bridge.")]
+    #[command(about = "Export logical browser storage via native Rust Playwright.")]
     ExportBrowserState(ExportBrowserStateArgs),
-    #[command(about = "Import logical browser state via Playwright bridge.")]
+    #[command(about = "Import logical browser state via native Rust Playwright.")]
     ImportBrowserState(ImportBrowserStateArgs),
     #[command(about = "Atomically swap merged profile into live path.")]
     Deploy(DeployArgs),
@@ -275,13 +275,15 @@ fn run_merge(args: MergeArgs) -> Result<()> {
 fn run_export_browser_state(args: ExportBrowserStateArgs) -> Result<()> {
     ensure_playwright_available()?;
     export_browser_state_with_playwright(&args.profile, &args.output, &args.origin, args.headless)
+        .map(|_| ())
 }
 
 fn run_import_browser_state(args: ImportBrowserStateArgs) -> Result<()> {
     ensure_playwright_available()?;
+    let browser_state = read_browser_state(&args.input)?;
     import_browser_state_with_playwright(
         &args.profile,
-        &args.input,
+        &browser_state,
         args.headless,
         args.replace_local_storage,
     )
@@ -448,9 +450,10 @@ fn apply_merged_profile_if_requested(
                 "--apply requires merged browser-state output when browser-state merge is enabled"
             );
         };
+        let merged_state = read_browser_state(browser_state_output)?;
         import_browser_state_with_playwright(
             &summary.output_profile,
-            browser_state_output,
+            &merged_state,
             headless_browser_state,
             true,
         )?;
