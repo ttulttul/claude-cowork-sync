@@ -5,6 +5,7 @@ pub mod fs_merge;
 pub mod merge_engine;
 pub mod metadata_merge;
 pub mod models;
+pub mod progress;
 pub mod remote_profile;
 pub mod utils;
 pub mod validate;

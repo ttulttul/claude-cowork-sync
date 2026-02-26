@@ -8,6 +8,7 @@ use log::{error, info, warn};
 use crate::browser_storage::{merge_browser_states, read_browser_state, write_browser_state};
 use crate::fs_merge::merge_session_trees;
 use crate::models::{SessionBinding, SessionMergeResult, ValidationResult};
+use crate::progress::{run_with_spinner_result, ProgressColor};
 use crate::validate::validate_merged_profile;
 
 #[derive(Debug, Clone)]
@@ -125,7 +126,13 @@ fn prepare_output_profile(
         info!("Excluding non-essential cache directories from base profile copy");
     }
 
-    copy_profile_tree(profile_a, output_profile, include_cache_dirs)?;
+    run_with_spinner_result(
+        "Prepare output",
+        "copying base profile",
+        ProgressColor::Yellow,
+        "copied",
+        || copy_profile_tree(profile_a, output_profile, include_cache_dirs),
+    )?;
     Ok(())
 }
 
@@ -265,8 +272,20 @@ fn merge_browser_state_files(
         );
     };
 
-    let state_a = read_browser_state(browser_state_a_path)?;
-    let state_b = read_browser_state(browser_state_b_path)?;
+    let state_a = run_with_spinner_result(
+        "Browser state",
+        "reading export A",
+        ProgressColor::Blue,
+        "loaded A",
+        || read_browser_state(browser_state_a_path),
+    )?;
+    let state_b = run_with_spinner_result(
+        "Browser state",
+        "reading export B",
+        ProgressColor::Blue,
+        "loaded B",
+        || read_browser_state(browser_state_b_path),
+    )?;
 
     let mut binding_map: HashMap<String, SessionBinding> = HashMap::new();
     for (session_id, result) in merged_sessions {
@@ -282,7 +301,13 @@ fn merge_browser_state_files(
         profile_mtime_ms(&options.profile_b)?,
         options.merge_indexeddb,
     );
-    write_browser_state(browser_state_output_path, &merged)?;
+    run_with_spinner_result(
+        "Browser state",
+        "writing merged export",
+        ProgressColor::Blue,
+        "written",
+        || write_browser_state(browser_state_output_path, &merged),
+    )?;
     Ok((
         Some(browser_state_output_path.clone()),
         merged.local_storage.clone(),

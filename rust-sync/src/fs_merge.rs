@@ -9,6 +9,7 @@ use walkdir::WalkDir;
 
 use crate::metadata_merge::merge_session_metadata;
 use crate::models::{SessionBinding, SessionMergeResult, SessionSourceRecord};
+use crate::progress::{ProgressColor, TerminalProgress};
 use crate::utils::{
     conflict_path, ensure_parent, parse_int_timestamp, read_json_object, sha256_file, sha256_text,
     write_json_object,
@@ -83,6 +84,13 @@ pub fn merge_session_trees(
     let session_ids: BTreeSet<String> = records_a.keys().chain(records_b.keys()).cloned().collect();
 
     let mut merged_results = BTreeMap::new();
+    let mut progress = TerminalProgress::new(
+        "Merging sessions",
+        Some(session_ids.len() as u64),
+        "sessions",
+        ProgressColor::Green,
+    );
+    let mut index = 0_u64;
     for session_id in session_ids {
         let record_a = records_a.get(&session_id);
         let record_b = records_b.get(&session_id);
@@ -101,7 +109,10 @@ pub fn merge_session_trees(
         };
 
         merged_results.insert(session_id, result);
+        index += 1;
+        progress.update(index, &format!("merged={}", merged_results.len()), false);
     }
+    progress.finish(index, &format!("merged={}", merged_results.len()), true);
 
     info!(
         "Merged {} sessions into {}",

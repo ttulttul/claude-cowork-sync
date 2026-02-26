@@ -47,3 +47,4 @@
 - For Claude profile copy reliability, preserving symlinks (including dangling ones) is required in the Rust base-profile copy stage, otherwise session debug-link paths can fail or be silently altered.
 - Rust can merge logical browser-state JSON exports with parity for `cowork-read-state`, session binding hydration, draft key timestamp precedence, and IndexedDB timestamp conflict resolution without touching Chromium LevelDB internals.
 - For full Rust ownership of browser-state workflows, using `playwright-rs` directly allows native export/import and `merge --auto-export-browser-state --apply` behavior without depending on the Python CLI implementation.
+- A lightweight in-place terminal renderer in Rust (spinners for unknown totals, bars for known totals, and byte counters for stream copy) gives Python-parity UX without extra UI dependencies, and can share the same `COWORK_MERGE_PROGRESS` env toggle.

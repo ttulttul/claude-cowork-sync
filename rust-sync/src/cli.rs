@@ -16,6 +16,7 @@ use crate::browser_storage::{
 };
 use crate::deploy::atomic_swap_profile;
 use crate::merge_engine::{merge_profiles, MergeOptions, MergeSummary};
+use crate::progress::{run_with_spinner_result, ProgressColor};
 use crate::remote_profile::fetch_remote_profile;
 
 #[derive(Debug, Parser)]
@@ -273,19 +274,52 @@ fn run_merge(args: MergeArgs) -> Result<()> {
 }
 
 fn run_export_browser_state(args: ExportBrowserStateArgs) -> Result<()> {
-    ensure_playwright_available()?;
-    export_browser_state_with_playwright(&args.profile, &args.output, &args.origin, args.headless)
-        .map(|_| ())
+    run_with_spinner_result(
+        "Playwright preflight",
+        "checking runtime",
+        ProgressColor::Blue,
+        "ready",
+        ensure_playwright_available,
+    )?;
+    run_with_spinner_result(
+        "Browser export",
+        "reading localStorage + IndexedDB",
+        ProgressColor::Blue,
+        "exported",
+        || {
+            export_browser_state_with_playwright(
+                &args.profile,
+                &args.output,
+                &args.origin,
+                args.headless,
+            )
+            .map(|_| ())
+        },
+    )
 }
 
 fn run_import_browser_state(args: ImportBrowserStateArgs) -> Result<()> {
-    ensure_playwright_available()?;
+    run_with_spinner_result(
+        "Playwright preflight",
+        "checking runtime",
+        ProgressColor::Blue,
+        "ready",
+        ensure_playwright_available,
+    )?;
     let browser_state = read_browser_state(&args.input)?;
-    import_browser_state_with_playwright(
-        &args.profile,
-        &browser_state,
-        args.headless,
-        args.replace_local_storage,
+    run_with_spinner_result(
+        "Browser import",
+        "writing localStorage + IndexedDB",
+        ProgressColor::Blue,
+        "imported",
+        || {
+            import_browser_state_with_playwright(
+                &args.profile,
+                &browser_state,
+                args.headless,
+                args.replace_local_storage,
+            )
+        },
     )
 }
 
@@ -311,7 +345,13 @@ fn preflight_browser_state_requirements(args: &MergeArgs) -> Result<()> {
     if !requires_playwright_auto_export(args) && !requires_playwright_apply(args) {
         return Ok(());
     }
-    ensure_playwright_available()
+    run_with_spinner_result(
+        "Playwright preflight",
+        "checking runtime",
+        ProgressColor::Blue,
+        "ready",
+        ensure_playwright_available,
+    )
 }
 
 fn requires_playwright_auto_export(args: &MergeArgs) -> bool {
@@ -411,17 +451,35 @@ fn resolve_browser_state_paths(
     let browser_state_output = tempdir.path().join("browser_state_merged.json");
     let headless = resolved_headless_browser_state(args);
 
-    export_browser_state_with_playwright(
-        profile_a,
-        &browser_state_a,
-        "https://claude.ai",
-        headless,
+    run_with_spinner_result(
+        "Browser export (A)",
+        "reading localStorage + IndexedDB",
+        ProgressColor::Blue,
+        "exported",
+        || {
+            export_browser_state_with_playwright(
+                profile_a,
+                &browser_state_a,
+                "https://claude.ai",
+                headless,
+            )
+            .map(|_| ())
+        },
     )?;
-    export_browser_state_with_playwright(
-        profile_b,
-        &browser_state_b,
-        "https://claude.ai",
-        headless,
+    run_with_spinner_result(
+        "Browser export (B)",
+        "reading localStorage + IndexedDB",
+        ProgressColor::Blue,
+        "exported",
+        || {
+            export_browser_state_with_playwright(
+                profile_b,
+                &browser_state_b,
+                "https://claude.ai",
+                headless,
+            )
+            .map(|_| ())
+        },
     )?;
 
     *browser_state_tempdir = Some(tempdir);
@@ -451,11 +509,19 @@ fn apply_merged_profile_if_requested(
             );
         };
         let merged_state = read_browser_state(browser_state_output)?;
-        import_browser_state_with_playwright(
-            &summary.output_profile,
-            &merged_state,
-            headless_browser_state,
-            true,
+        run_with_spinner_result(
+            "Browser import",
+            "writing localStorage + IndexedDB",
+            ProgressColor::Blue,
+            "imported",
+            || {
+                import_browser_state_with_playwright(
+                    &summary.output_profile,
+                    &merged_state,
+                    headless_browser_state,
+                    true,
+                )
+            },
         )?;
     }
 

@@ -82,6 +82,7 @@ Rust browser-state behavior:
 - Headless browser-state mode is enabled by default and can be disabled with `--no-headless-browser-state`.
 - Install Playwright Chromium for Rust CLI usage:
   - `npx playwright@1.56.1 install chromium`
+- Rust CLI now shows live terminal progress (spinners/bars) for merge stages, remote fetch streaming, and browser import/export when output is a TTY.
 
 ## Swift GUI app (macOS)
 

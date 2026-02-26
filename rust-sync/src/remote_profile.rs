@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, Read};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -7,6 +7,8 @@ use anyhow::{bail, Context, Result};
 use log::{debug, error, info};
 use regex::Regex;
 use which::which;
+
+use crate::progress::{format_bytes, ProgressColor, TerminalProgress};
 
 const NON_ESSENTIAL_CACHE_PATHS: [&str; 18] = [
     "$BASE_NAME/Cache",
@@ -241,6 +243,10 @@ fn fetch_remote_tar_with_command(
             )
         })?;
 
+    let mut progress = TerminalProgress::new("Remote fetch", None, "bytes", ProgressColor::Cyan)
+        .with_formatter(format_bytes);
+    let mut transferred = 0_u64;
+
     {
         let mut ssh_stdout = ssh_process
             .stdout
@@ -250,8 +256,24 @@ fn fetch_remote_tar_with_command(
             .stdin
             .take()
             .with_context(|| "Failed to capture tar stdin")?;
-        io::copy(&mut ssh_stdout, &mut tar_stdin)
-            .with_context(|| "Failed to stream remote tar payload")?;
+
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        loop {
+            let bytes_read = ssh_stdout
+                .read(&mut buffer)
+                .with_context(|| "Failed reading remote tar payload")?;
+            if bytes_read == 0 {
+                break;
+            }
+            tar_stdin
+                .write_all(&buffer[..bytes_read])
+                .with_context(|| "Failed writing tar payload to extractor")?;
+            transferred += bytes_read as u64;
+            progress.update(transferred, "", false);
+        }
+        tar_stdin
+            .flush()
+            .with_context(|| "Failed to flush tar extractor stdin")?;
     }
 
     let tar_status = tar_process
@@ -266,6 +288,11 @@ fn fetch_remote_tar_with_command(
 
     if !ssh_status.success() {
         error!("SSH transfer failed: {}", ssh_stderr.trim());
+        progress.finish(
+            transferred,
+            &format!("ssh_exit={:?}", ssh_status.code()),
+            false,
+        );
         bail!(
             "SSH transfer failed (exit {:?}): {}",
             ssh_status.code(),
@@ -275,6 +302,11 @@ fn fetch_remote_tar_with_command(
 
     if !tar_status.success() {
         error!("Tar extraction failed: {}", tar_stderr.trim());
+        progress.finish(
+            transferred,
+            &format!("tar_exit={:?}", tar_status.code()),
+            false,
+        );
         bail!(
             "Failed to extract remote profile stream (exit {:?}): {}",
             tar_status.code(),
@@ -282,6 +314,7 @@ fn fetch_remote_tar_with_command(
         );
     }
 
+    progress.finish(transferred, "transferred", true);
     Ok(())
 }
 

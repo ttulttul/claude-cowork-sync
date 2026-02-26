@@ -74,3 +74,4 @@ Notes:
 - `--no-headless-browser-state` disables headless mode for merge auto-export/apply import.
 - Install Chromium runtime for Playwright before using browser export/import:
   - `npx playwright@1.56.1 install chromium`
+- Live progress indicators (spinners/progress bars) are shown on TTY output for major stages. Disable with `COWORK_MERGE_PROGRESS=0`.
