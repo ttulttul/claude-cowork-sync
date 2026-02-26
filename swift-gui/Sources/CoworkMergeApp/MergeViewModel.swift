@@ -1,22 +1,66 @@
 import CoworkMergeCore
 import Foundation
 
+enum MergeSourceMode: String, CaseIterable, Identifiable {
+    case localProfileB = "Local Profile B"
+    case remoteHost = "Remote Host"
+
+    var id: String { rawValue }
+}
+
+enum MergeRunStatus {
+    case idle
+    case running
+    case success
+    case failed
+    case cancelled
+}
+
 @MainActor
 final class MergeViewModel: ObservableObject {
-    @Published var form: MergeFormData = MergeFormData(
-        profileA: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Library/Application Support/Claude",
-        remoteProfilePath: "Library/Application Support/Claude"
-    )
-    @Published var workspacePath: String = FileManager.default.currentDirectoryPath
+    @Published var form: MergeFormData
+    @Published var workspacePath: String
     @Published var outputLog: String = ""
+    @Published var sourceMode: MergeSourceMode
+    @Published var statusText: String = "Ready"
+    @Published var runStatus: MergeRunStatus = .idle
     @Published var isRunning: Bool = false
-    @Published var statusText: String = "Idle"
+    @Published var showAdvancedOptions: Bool = false
+    @Published var showManualBrowserState: Bool = false
 
     private let runner = ShellCommandRunner()
     private var runningTask: Task<Void, Never>?
+    private let maxLogCharacters = 250_000
+
+    init() {
+        form = MergeFormData(
+            profileA: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Library/Application Support/Claude",
+            remoteProfilePath: "Library/Application Support/Claude"
+        )
+        workspacePath = FileManager.default.currentDirectoryPath
+        sourceMode = .remoteHost
+    }
 
     var validationErrors: [String] {
         form.validationErrors
+    }
+
+    var canRun: Bool {
+        !isRunning && validationErrors.isEmpty
+    }
+
+    var commandPreview: String {
+        shellLine(from: MergeCommandBuilder.buildCommand(form: form))
+    }
+
+    func setSourceMode(_ mode: MergeSourceMode) {
+        sourceMode = mode
+        switch mode {
+        case .localProfileB:
+            form.mergeFrom = ""
+        case .remoteHost:
+            form.profileB = ""
+        }
     }
 
     func runMerge() {
@@ -25,33 +69,41 @@ final class MergeViewModel: ObservableObject {
         }
         let errors = form.validationErrors
         guard errors.isEmpty else {
-            outputLog.append("Validation failed:\n")
+            appendOutput("Validation failed:\n")
             for error in errors {
-                outputLog.append("- \(error)\n")
+                appendOutput("- \(error)\n")
             }
+            runStatus = .failed
+            statusText = "Fix validation errors before running."
             return
         }
 
         let command = MergeCommandBuilder.buildCommand(form: form)
-        outputLog.append("$ \(shellLine(from: command))\n")
+        appendOutput("$ \(shellLine(from: command))\n")
         isRunning = true
-        statusText = "Running merge..."
+        runStatus = .running
+        statusText = "Merge in progress..."
+
         runningTask = Task {
             do {
-                let status = try await runner.run(command: command, workingDirectory: self.workspacePath) { [weak self] chunk in
+                let status = try await runner.run(command: command, workingDirectory: workspacePath) { [weak self] chunk in
                     Task { @MainActor in
-                        self?.outputLog.append(chunk)
+                        self?.appendOutput(chunk)
                     }
                 }
                 await MainActor.run {
                     self.isRunning = false
-                    self.statusText = status == 0 ? "Merge completed successfully." : "Merge failed with exit code \(status)."
+                    self.runStatus = status == 0 ? .success : .failed
+                    self.statusText = status == 0
+                        ? "Merge completed successfully."
+                        : "Merge failed with exit code \(status)."
                 }
             } catch {
                 await MainActor.run {
                     self.isRunning = false
+                    self.runStatus = .failed
                     self.statusText = "Merge failed: \(error.localizedDescription)"
-                    self.outputLog.append("Error: \(error.localizedDescription)\n")
+                    self.appendOutput("Error: \(error.localizedDescription)\n")
                 }
             }
         }
@@ -67,8 +119,20 @@ final class MergeViewModel: ObservableObject {
         runningTask?.cancel()
         runningTask = nil
         isRunning = false
+        runStatus = .cancelled
         statusText = "Cancelled."
-        outputLog.append("Command cancelled by user.\n")
+        appendOutput("Command cancelled by user.\n")
+    }
+
+    func clearOutput() {
+        outputLog = ""
+    }
+
+    private func appendOutput(_ text: String) {
+        outputLog.append(text)
+        if outputLog.count > maxLogCharacters {
+            outputLog.removeFirst(outputLog.count - maxLogCharacters)
+        }
     }
 
     private func shellLine(from command: [String]) -> String {

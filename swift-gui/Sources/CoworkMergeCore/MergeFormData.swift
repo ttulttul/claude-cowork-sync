@@ -78,14 +78,18 @@ public struct MergeFormData: Equatable {
             errors.append("Set exactly one source: Profile B path or Merge From host.")
         }
 
-        if !parallelRemote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           Int(parallelRemote.trimmingCharacters(in: .whitespacesAndNewlines)) == nil {
-            errors.append("Parallel Remote must be a whole number.")
+        if let remoteParallelism = parsePositiveInt(parallelRemote), remoteParallelism < 1 {
+            errors.append("Parallel Remote must be greater than or equal to 1.")
+        } else if !parallelRemote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  parsePositiveInt(parallelRemote) == nil {
+            errors.append("Parallel Remote must be a whole number greater than or equal to 1.")
         }
 
-        if !parallelLocal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           Int(parallelLocal.trimmingCharacters(in: .whitespacesAndNewlines)) == nil {
-            errors.append("Parallel Local must be a whole number.")
+        if let localParallelism = parsePositiveInt(parallelLocal), localParallelism < 1 {
+            errors.append("Parallel Local must be greater than or equal to 1.")
+        } else if !parallelLocal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  parsePositiveInt(parallelLocal) == nil {
+            errors.append("Parallel Local must be a whole number greater than or equal to 1.")
         }
 
         if !skipBrowserState {
@@ -104,5 +108,13 @@ public struct MergeFormData: Equatable {
 
     public var isValid: Bool {
         validationErrors.isEmpty
+    }
+
+    private func parsePositiveInt(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        return Int(trimmed)
     }
 }

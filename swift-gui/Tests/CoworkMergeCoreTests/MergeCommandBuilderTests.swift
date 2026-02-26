@@ -82,4 +82,17 @@ final class MergeCommandBuilderTests: XCTestCase {
         XCTAssertTrue(command.contains("--no-headless-browser-state"))
         XCTAssertFalse(command.contains("--headless-browser-state"))
     }
+
+    func testValidationRejectsNonPositiveParallelism() {
+        let form = MergeFormData(
+            profileA: "/tmp/a",
+            profileB: "/tmp/b",
+            parallelRemote: "0",
+            parallelLocal: "-2"
+        )
+
+        XCTAssertFalse(form.isValid)
+        XCTAssertTrue(form.validationErrors.contains("Parallel Remote must be greater than or equal to 1."))
+        XCTAssertTrue(form.validationErrors.contains("Parallel Local must be greater than or equal to 1."))
+    }
 }

@@ -61,8 +61,10 @@ swift run --package-path swift-gui CoworkMergeApp
 Inside the app:
 
 - Set `Repository Root` to this repo path so `uv run cowork-merge ...` can resolve `pyproject.toml`.
-- Provide exactly one source B input: either `Profile B` or `Merge From (user@host)`.
-- Review the live output pane for command logs and merge results.
+- Choose a secondary source type (`Local Profile B` or `Remote Host`); the UI clears incompatible fields automatically.
+- Use progressive disclosure for advanced and manual browser-state options to keep routine merges focused.
+- Validate before run with inline error sections and use the command preview pane to verify exact CLI arguments.
+- Review the live execution log pane for streaming output and copy/share logs or command previews directly.
 
 ## Expected profile paths (macOS)
 

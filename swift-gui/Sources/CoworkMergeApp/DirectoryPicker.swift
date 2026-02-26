@@ -20,4 +20,12 @@ enum DirectoryPicker {
         panel.prompt = "Select"
         return panel.runModal() == .OK ? panel.url?.path : nil
     }
+
+    static func pickSaveFile(defaultName: String) -> String? {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = defaultName
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        return panel.runModal() == .OK ? panel.url?.path : nil
+    }
 }

@@ -34,3 +34,6 @@
 - A practical Swift migration path is to keep the validated Python merge engine as-is and implement a native SwiftUI shell that constructs CLI arguments and streams process output, which avoids risky logic rewrites.
 - Swift Package test/build execution may fail in constrained environments unless run outside strict sandboxing because `swift` invokes additional sandboxing and cache paths under user-level directories.
 - Keeping command-generation logic in a small testable Swift core target (separate from the UI target) makes it easy to validate form-to-CLI mapping with fast XCTest unit coverage.
+- A two-pane SwiftUI desktop layout (configuration on left, run status/logs on right) improves scanability for long-running operational tools because users can monitor output without losing form context.
+- Progressive disclosure (`DisclosureGroup`) for advanced options and manual browser-state paths reduces configuration errors by hiding low-frequency controls during common merges.
+- Enforcing source-mode exclusivity in the UI (local profile B vs remote host) prevents a common invalid state before command execution and keeps validation noise low.
