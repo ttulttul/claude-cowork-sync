@@ -3,7 +3,7 @@
 - Legacy Python/Swift stack lives under `python/` and is deprecated.
 - Use `rg` for fast search.
 - This is a macOS environment.
-- Git remote is Bitbucket.
+- Git remote is GitHub.
 - Use a direct-to-main workflow (no PR process in this repo).
 - Record significant discoveries in `docs/LEARNINGS.md`.
 - Update `README.md` for major user-visible behavior changes.

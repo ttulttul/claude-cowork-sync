@@ -7,14 +7,14 @@ Automate Homebrew formula generation for cowork-merge-rs.
 
 Usage:
   scripts/release_to_brew.sh \
-    --workspace <bitbucket-workspace> \
-    --repo <bitbucket-repo-slug> \
+    --workspace <github-owner> \
+    --repo <github-repo-name> \
     --version <0.1.0|v0.1.0> \
     --tap-dir <path-to-local-homebrew-tap>
 
 Required args:
-  --workspace   Bitbucket workspace name
-  --repo        Bitbucket repository slug
+  --workspace   GitHub owner/org name
+  --repo        GitHub repository name
   --version     Release version (with or without leading v)
   --tap-dir     Local path to tap repo root (must contain Formula/)
 
@@ -159,8 +159,8 @@ fi
 
 formula_class="$(camel_case_formula_class "$formula_name")"
 formula_file="$tap_dir/Formula/$formula_name.rb"
-homepage="https://bitbucket.org/$workspace/$repo"
-tarball_url="https://bitbucket.org/$workspace/$repo/get/$tag.tar.gz"
+homepage="https://github.com/$workspace/$repo"
+tarball_url="https://github.com/$workspace/$repo/archive/refs/tags/$tag.tar.gz"
 
 echo "==> Release inputs"
 echo "Repo root:   $repo_root"

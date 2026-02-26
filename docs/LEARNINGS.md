@@ -63,3 +63,4 @@
 - Repository layout now centers Rust at root (`Cargo.toml` + `src/`) while moving the legacy Python CLI and Swift GUI under `python/` with explicit deprecation markers to reduce ambiguity about the active implementation.
 - README clarity improves materially when structured around the primary operational path (`merge --merge-from ... --apply`) with advanced internals moved to appendices; this reduces onboarding friction for day-to-day users.
 - Packaging/release toil drops when the repeatable Homebrew flow (tag, SHA fetch, formula render, local brew test) is scripted end-to-end instead of handled manually per release.
+- Homebrew release automation should generate formulas from GitHub tag archives (`.../archive/refs/tags/<tag>.tar.gz`) when the upstream host is GitHub, or checksum validation will fail against mismatched source URLs.
