@@ -50,3 +50,4 @@
 - A lightweight in-place terminal renderer in Rust (spinners for unknown totals, bars for known totals, and byte counters for stream copy) gives Python-parity UX without extra UI dependencies, and can share the same `COWORK_MERGE_PROGRESS` env toggle.
 - Rust incremental remote fetch only activates when the CLI passes local `profile_a` as the baseline into remote-fetch planning; otherwise behavior silently falls back to full-profile SSH copy every run.
 - To reduce repeated non-session base transfers across `--merge-from` runs, it is effective to seed unchanged files from both local baseline and a persistent host/path-scoped local cache, then fetch only remaining remote misses.
+- Session re-transfer churn can persist even after base caching because merged local session metadata may not byte-match remote `local_*.json`; caching remote session trees by host/path and seeding when remote JSON hash matches eliminates repeated large session-delta downloads.

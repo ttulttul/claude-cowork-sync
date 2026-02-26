@@ -19,6 +19,12 @@ struct BaseSyncPlan {
     seed_from_cache: Vec<String>,
 }
 
+#[derive(Debug, Default)]
+struct SessionSyncPlan {
+    transfer_entries: Vec<(String, String)>,
+    seed_from_cache_entries: Vec<(String, String)>,
+}
+
 const NON_ESSENTIAL_CACHE_DIRS: [&str; 9] = [
     "Cache",
     "Code Cache",
@@ -233,6 +239,13 @@ fn fetch_remote_profile_incremental(
 
     let remote_hashes =
         list_remote_session_json_hashes(remote_host, remote_profile_path, parallel_remote)?;
+    let session_cache_root = resolve_remote_session_cache_path(remote_host, remote_profile_path)?;
+    fs::create_dir_all(&session_cache_root).with_context(|| {
+        format!(
+            "Failed to create remote session cache directory {}",
+            session_cache_root.display()
+        )
+    })?;
 
     let mut session_diff_progress = TerminalProgress::new(
         "Session diff",
@@ -244,32 +257,47 @@ fn fetch_remote_profile_incremental(
         "sessions",
         ProgressColor::Magenta,
     );
-    let transfer_paths = paths_to_transfer_for_remote_sessions(
+    let session_plan = plan_remote_session_sync(
         &remote_hashes,
         baseline_profile,
+        &session_cache_root,
         Some(&mut session_diff_progress),
     );
     session_diff_progress.finish(
         remote_hashes.len() as u64,
-        &format!("transfer_paths={}", transfer_paths.len()),
+        &format!(
+            "transfer_sessions={} seed_cache={}",
+            session_plan.transfer_entries.len(),
+            session_plan.seed_from_cache_entries.len()
+        ),
         true,
     );
     info!(
-        "Incremental session diff: remote_sessions={} transfer_paths={}",
+        "Incremental session diff: remote_sessions={} transfer_sessions={} seed_cache={}",
         remote_hashes.len(),
-        transfer_paths.len()
+        session_plan.transfer_entries.len(),
+        session_plan.seed_from_cache_entries.len()
     );
 
-    if transfer_paths.is_empty() {
-        return Ok(());
-    }
-
-    fetch_remote_tar_with_path_list(
-        remote_host,
-        &build_remote_tar_from_path_list_command(remote_profile_path)?,
+    seed_session_entries_from_cache(
+        &session_cache_root,
         &incremental_target_root,
-        &transfer_paths,
-        "Remote fetch (session delta)",
+        &session_plan.seed_from_cache_entries,
+    )?;
+
+    if !session_plan.transfer_entries.is_empty() {
+        fetch_remote_tar_with_path_list(
+            remote_host,
+            &build_remote_tar_from_path_list_command(remote_profile_path)?,
+            &incremental_target_root,
+            &session_entries_to_path_list(&session_plan.transfer_entries),
+            "Remote fetch (session delta)",
+        )?;
+    }
+    sync_remote_session_cache(
+        &session_cache_root,
+        &incremental_target_root,
+        &session_plan.transfer_entries,
     )
 }
 
@@ -581,13 +609,25 @@ fn parse_remote_hash_lines(stdout: &[u8]) -> Result<HashMap<String, String>> {
     Ok(hashes)
 }
 
+#[cfg(test)]
 fn paths_to_transfer_for_remote_sessions(
     remote_hashes: &HashMap<String, String>,
     baseline_profile: &Path,
-    mut progress: Option<&mut TerminalProgress>,
+    progress: Option<&mut TerminalProgress>,
 ) -> Vec<String> {
+    let cache_root = baseline_profile.join(".__cowork_missing_session_cache__");
+    let plan = plan_remote_session_sync(remote_hashes, baseline_profile, &cache_root, progress);
+    session_entries_to_path_list(&plan.transfer_entries)
+}
+
+fn plan_remote_session_sync(
+    remote_hashes: &HashMap<String, String>,
+    baseline_profile: &Path,
+    session_cache_root: &Path,
+    mut progress: Option<&mut TerminalProgress>,
+) -> SessionSyncPlan {
     let sorted_paths: BTreeSet<String> = remote_hashes.keys().cloned().collect();
-    let mut transfer_paths = Vec::new();
+    let mut plan = SessionSyncPlan::default();
 
     let mut index = 0_u64;
     for relative_json in sorted_paths {
@@ -598,28 +638,59 @@ fn paths_to_transfer_for_remote_sessions(
             }
             continue;
         }
-        let session_folder = relative_json.trim_end_matches(".json");
+        let session_folder = relative_json.trim_end_matches(".json").to_string();
+        let remote_hash = remote_hashes
+            .get(&relative_json)
+            .map(String::as_str)
+            .unwrap_or_default();
         let local_json = baseline_profile.join(&relative_json);
-        if should_transfer_remote_session_json(
-            &local_json,
-            remote_hashes
-                .get(&relative_json)
-                .map(String::as_str)
-                .unwrap_or_default(),
-        ) {
-            transfer_paths.push(relative_json.clone());
-            transfer_paths.push(session_folder.to_string());
+        if should_transfer_remote_session_json(&local_json, remote_hash) {
+            if session_cache_has_entry(
+                session_cache_root,
+                &relative_json,
+                &session_folder,
+                remote_hash,
+            ) {
+                plan.seed_from_cache_entries
+                    .push((relative_json.clone(), session_folder));
+            } else {
+                plan.transfer_entries
+                    .push((relative_json.clone(), session_folder));
+            }
         }
         if let Some(progress_ref) = progress.as_mut() {
             progress_ref.update(
                 index,
-                &format!("transfer_paths={}", transfer_paths.len()),
+                &format!(
+                    "transfer_sessions={} seed_cache={}",
+                    plan.transfer_entries.len(),
+                    plan.seed_from_cache_entries.len()
+                ),
                 false,
             );
         }
     }
 
-    transfer_paths
+    plan
+}
+
+fn session_entries_to_path_list(entries: &[(String, String)]) -> Vec<String> {
+    let mut paths = Vec::with_capacity(entries.len() * 2);
+    for (json_path, folder_path) in entries {
+        paths.push(json_path.clone());
+        paths.push(folder_path.clone());
+    }
+    paths
+}
+
+fn session_cache_has_entry(
+    cache_root: &Path,
+    json_path: &str,
+    folder_path: &str,
+    remote_hash: &str,
+) -> bool {
+    local_file_matches_hash(&cache_root.join(json_path), remote_hash)
+        && cache_root.join(folder_path).is_dir()
 }
 
 fn plan_remote_base_sync(
@@ -695,27 +766,7 @@ fn seed_files_from_source(
     for (index, relative_path) in relative_paths.iter().enumerate() {
         let source = source_root.join(relative_path);
         let target = target_root.join(relative_path);
-        let parent = target.parent().with_context(|| {
-            format!(
-                "Target path has no parent for seeded file {}",
-                target.display()
-            )
-        })?;
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create parent {}", parent.display()))?;
-        if target.exists() {
-            fs::remove_file(&target)
-                .with_context(|| format!("Failed to replace {}", target.display()))?;
-        }
-        if fs::hard_link(&source, &target).is_err() {
-            fs::copy(&source, &target).with_context(|| {
-                format!(
-                    "Failed to seed file {} from {}",
-                    target.display(),
-                    source.display()
-                )
-            })?;
-        }
+        copy_file_with_hardlink_fallback(&source, &target)?;
         progress.update((index + 1) as u64, "", false);
     }
     progress.finish(relative_paths.len() as u64, "seeded", true);
@@ -742,7 +793,170 @@ fn sync_remote_base_cache(
     )
 }
 
+fn seed_session_entries_from_cache(
+    cache_root: &Path,
+    target_root: &Path,
+    entries: &[(String, String)],
+) -> Result<()> {
+    sync_session_entries_from_source(cache_root, target_root, entries, "Session seed (cache)")
+}
+
+fn sync_remote_session_cache(
+    cache_root: &Path,
+    incremental_target_root: &Path,
+    entries: &[(String, String)],
+) -> Result<()> {
+    sync_session_entries_from_source(
+        incremental_target_root,
+        cache_root,
+        entries,
+        "Session cache (remote)",
+    )
+}
+
+fn sync_session_entries_from_source(
+    source_root: &Path,
+    target_root: &Path,
+    entries: &[(String, String)],
+    progress_label: &str,
+) -> Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let mut progress = TerminalProgress::new(
+        progress_label,
+        Some(entries.len() as u64),
+        "sessions",
+        ProgressColor::Blue,
+    );
+    for (index, (json_path, folder_path)) in entries.iter().enumerate() {
+        let source_json = source_root.join(json_path);
+        let target_json = target_root.join(json_path);
+        copy_file_with_hardlink_fallback(&source_json, &target_json)?;
+
+        let source_folder = source_root.join(folder_path);
+        let target_folder = target_root.join(folder_path);
+        copy_tree_preserve_links(&source_folder, &target_folder)?;
+        progress.update((index + 1) as u64, "", false);
+    }
+    progress.finish(entries.len() as u64, "seeded", true);
+    Ok(())
+}
+
+fn copy_file_with_hardlink_fallback(source: &Path, target: &Path) -> Result<()> {
+    let parent = target.parent().with_context(|| {
+        format!(
+            "Target path has no parent for file copy {}",
+            target.display()
+        )
+    })?;
+    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
+    remove_path_if_exists(target)?;
+    if fs::hard_link(source, target).is_err() {
+        fs::copy(source, target).with_context(|| {
+            format!(
+                "Failed to copy file {} to {}",
+                source.display(),
+                target.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn copy_tree_preserve_links(source_root: &Path, target_root: &Path) -> Result<()> {
+    let source_metadata = fs::symlink_metadata(source_root)
+        .with_context(|| format!("Failed to stat source tree {}", source_root.display()))?;
+    if !source_metadata.file_type().is_dir() {
+        bail!(
+            "Expected directory when seeding session tree: {}",
+            source_root.display()
+        );
+    }
+
+    fs::create_dir_all(target_root)
+        .with_context(|| format!("Failed to create {}", target_root.display()))?;
+    for entry in fs::read_dir(source_root)
+        .with_context(|| format!("Failed to read directory {}", source_root.display()))?
+    {
+        let entry = entry
+            .with_context(|| format!("Failed reading entry under {}", source_root.display()))?;
+        let source_path = entry.path();
+        let target_path = target_root.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path)
+            .with_context(|| format!("Failed to stat {}", source_path.display()))?;
+
+        if metadata.file_type().is_dir() {
+            copy_tree_preserve_links(&source_path, &target_path)?;
+            continue;
+        }
+
+        if metadata.file_type().is_symlink() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::symlink;
+                let link_target = fs::read_link(&source_path)
+                    .with_context(|| format!("Failed to read symlink {}", source_path.display()))?;
+                remove_path_if_exists(&target_path)?;
+                if let Some(parent) = target_path.parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("Failed to create {}", parent.display()))?;
+                }
+                symlink(&link_target, &target_path).with_context(|| {
+                    format!(
+                        "Failed to seed symlink {} -> {}",
+                        source_path.display(),
+                        target_path.display()
+                    )
+                })?;
+            }
+            #[cfg(not(unix))]
+            {
+                bail!("Symlink seeding is not supported on this platform");
+            }
+            continue;
+        }
+
+        if metadata.file_type().is_file() {
+            copy_file_with_hardlink_fallback(&source_path, &target_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<()> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if metadata.file_type().is_dir() {
+        fs::remove_dir_all(path).with_context(|| format!("Failed to remove {}", path.display()))?;
+    } else {
+        fs::remove_file(path).with_context(|| format!("Failed to remove {}", path.display()))?;
+    }
+    Ok(())
+}
+
 fn resolve_remote_base_cache_path(remote_host: &str, remote_profile_path: &str) -> Result<PathBuf> {
+    resolve_remote_cache_path(remote_host, remote_profile_path, "cowork-remote-base-cache")
+}
+
+fn resolve_remote_session_cache_path(
+    remote_host: &str,
+    remote_profile_path: &str,
+) -> Result<PathBuf> {
+    resolve_remote_cache_path(
+        remote_host,
+        remote_profile_path,
+        "cowork-remote-session-cache",
+    )
+}
+
+fn resolve_remote_cache_path(
+    remote_host: &str,
+    remote_profile_path: &str,
+    cache_namespace: &str,
+) -> Result<PathBuf> {
     let remote_name = remote_profile_name(remote_profile_path)?;
     let host_key = sanitize_for_path_component(remote_host);
     let profile_hash = sha256_text(remote_profile_path)
@@ -750,7 +964,7 @@ fn resolve_remote_base_cache_path(remote_host: &str, remote_profile_path: &str) 
         .take(12)
         .collect::<String>();
     Ok(std::env::temp_dir()
-        .join("cowork-remote-base-cache")
+        .join(cache_namespace)
         .join(host_key)
         .join(format!("{remote_name}-{profile_hash}")))
 }
@@ -971,7 +1185,7 @@ mod tests {
     use super::{
         build_remote_session_hash_command, build_remote_session_hash_command_with_parallel,
         build_remote_tar_command, paths_to_transfer_for_remote_sessions, plan_remote_base_sync,
-        should_transfer_remote_session_json,
+        plan_remote_session_sync, should_transfer_remote_session_json,
     };
 
     #[test]
@@ -1145,6 +1359,64 @@ mod tests {
         assert!(plan
             .transfer_paths
             .contains(&"Local Storage/leveldb/MANIFEST-000001".to_string()));
+    }
+
+    #[test]
+    fn plan_remote_session_sync_uses_cache_for_mismatched_local_sessions() {
+        let tmp = tempdir().expect("tempdir");
+        let baseline = tmp.path().join("baseline");
+        let cache = tmp.path().join("cache");
+
+        let baseline_same = baseline.join("local-agent-mode-sessions/u/o/local_same.json");
+        let baseline_changed = baseline.join("local-agent-mode-sessions/u/o/local_changed.json");
+        let cache_changed_json = cache.join("local-agent-mode-sessions/u/o/local_changed.json");
+        let cache_changed_folder = cache.join("local-agent-mode-sessions/u/o/local_changed");
+
+        fs::create_dir_all(
+            baseline_same
+                .parent()
+                .expect("baseline session file should have parent"),
+        )
+        .expect("create baseline parent");
+        fs::create_dir_all(
+            cache_changed_json
+                .parent()
+                .expect("cache session file should have parent"),
+        )
+        .expect("create cache parent");
+        fs::create_dir_all(&cache_changed_folder).expect("create cache folder");
+
+        fs::write(&baseline_same, "same").expect("write baseline same");
+        fs::write(&baseline_changed, "old").expect("write baseline changed");
+        fs::write(&cache_changed_json, "remote-changed").expect("write cache changed");
+
+        let hashes = HashMap::from([
+            (
+                "local-agent-mode-sessions/u/o/local_same.json".to_string(),
+                sha256_text("same"),
+            ),
+            (
+                "local-agent-mode-sessions/u/o/local_changed.json".to_string(),
+                sha256_text("remote-changed"),
+            ),
+            (
+                "local-agent-mode-sessions/u/o/local_missing.json".to_string(),
+                sha256_text("remote-missing"),
+            ),
+        ]);
+
+        let plan = plan_remote_session_sync(&hashes, &baseline, &cache, None);
+
+        assert_eq!(plan.seed_from_cache_entries.len(), 1);
+        assert_eq!(plan.transfer_entries.len(), 1);
+        assert_eq!(
+            plan.seed_from_cache_entries[0].0,
+            "local-agent-mode-sessions/u/o/local_changed.json"
+        );
+        assert_eq!(
+            plan.transfer_entries[0].0,
+            "local-agent-mode-sessions/u/o/local_missing.json"
+        );
     }
 
     use std::collections::HashMap;
