@@ -85,6 +85,7 @@ Rust browser-state behavior:
 - Rust CLI now shows live terminal progress (spinners/bars) for merge stages, remote fetch streaming, and browser import/export when output is a TTY.
 - Rust `merge --merge-from` uses local profile A as an incremental baseline and transfers only changed remote non-session files plus changed/new remote session trees.
 - Rust `merge` supports `--parallel-remote <N>` to control remote hash parallelism during incremental transfer planning.
+- Rust remote base-file planning now reuses a local host-scoped cache under the system temp directory, seeding unchanged files from local baseline or cache before SSH transfer to reduce repeated full base downloads.
 
 ## Swift GUI app (macOS)
 

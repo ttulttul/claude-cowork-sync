@@ -10,7 +10,14 @@ use regex::Regex;
 use which::which;
 
 use crate::progress::{format_bytes, ProgressColor, TerminalProgress};
-use crate::utils::sha256_file;
+use crate::utils::{sha256_file, sha256_text};
+
+#[derive(Debug, Default)]
+struct BaseSyncPlan {
+    transfer_paths: Vec<String>,
+    seed_from_baseline: Vec<String>,
+    seed_from_cache: Vec<String>,
+}
 
 const NON_ESSENTIAL_CACHE_DIRS: [&str; 9] = [
     "Cache",
@@ -82,6 +89,10 @@ pub fn fetch_remote_profile(
                 parallel_remote,
             )?;
         } else {
+            warn!(
+                "Baseline profile does not exist ({}); falling back to full remote fetch",
+                baseline.display()
+            );
             fetch_remote_tar_with_command(
                 remote_host,
                 &build_remote_tar_command(
@@ -141,6 +152,13 @@ fn fetch_remote_profile_incremental(
             incremental_target_root.display()
         )
     })?;
+    let base_cache_root = resolve_remote_base_cache_path(remote_host, remote_profile_path)?;
+    fs::create_dir_all(&base_cache_root).with_context(|| {
+        format!(
+            "Failed to create remote base-file cache directory {}",
+            base_cache_root.display()
+        )
+    })?;
 
     let remote_base_hashes = list_remote_non_session_file_hashes(
         remote_host,
@@ -160,31 +178,58 @@ fn fetch_remote_profile_incremental(
         "files",
         ProgressColor::Yellow,
     );
-    let base_transfer_paths = paths_to_transfer_for_remote_base(
+    let base_plan = plan_remote_base_sync(
         &remote_base_hashes,
         baseline_profile,
+        &base_cache_root,
         Some(&mut base_diff_progress),
     );
     base_diff_progress.finish(
         remote_base_hashes.len() as u64,
-        &format!("transfer_paths={}", base_transfer_paths.len()),
+        &format!(
+            "transfer_paths={} seed_local={} seed_cache={}",
+            base_plan.transfer_paths.len(),
+            base_plan.seed_from_baseline.len(),
+            base_plan.seed_from_cache.len()
+        ),
         true,
     );
     info!(
-        "Incremental base diff: remote_files={} transfer_paths={}",
+        "Incremental base diff: remote_files={} transfer_paths={} seed_local={} seed_cache={}",
         remote_base_hashes.len(),
-        base_transfer_paths.len()
+        base_plan.transfer_paths.len(),
+        base_plan.seed_from_baseline.len(),
+        base_plan.seed_from_cache.len()
     );
 
-    if !base_transfer_paths.is_empty() {
+    seed_files_from_source(
+        baseline_profile,
+        &incremental_target_root,
+        &base_plan.seed_from_baseline,
+        "Base seed (local)",
+    )?;
+    seed_files_from_source(
+        &base_cache_root,
+        &incremental_target_root,
+        &base_plan.seed_from_cache,
+        "Base seed (cache)",
+    )?;
+
+    if !base_plan.transfer_paths.is_empty() {
         fetch_remote_tar_with_path_list(
             remote_host,
             &build_remote_tar_from_path_list_command(remote_profile_path)?,
             &incremental_target_root,
-            &base_transfer_paths,
+            &base_plan.transfer_paths,
             "Remote fetch (base profile)",
         )?;
     }
+    sync_remote_base_cache(
+        &base_cache_root,
+        baseline_profile,
+        &incremental_target_root,
+        &base_plan,
+    )?;
 
     let remote_hashes =
         list_remote_session_json_hashes(remote_host, remote_profile_path, parallel_remote)?;
@@ -577,50 +622,156 @@ fn paths_to_transfer_for_remote_sessions(
     transfer_paths
 }
 
-fn paths_to_transfer_for_remote_base(
+fn plan_remote_base_sync(
     remote_hashes: &HashMap<String, String>,
     baseline_profile: &Path,
+    base_cache_root: &Path,
     mut progress: Option<&mut TerminalProgress>,
-) -> Vec<String> {
+) -> BaseSyncPlan {
     let sorted_paths: BTreeSet<String> = remote_hashes.keys().cloned().collect();
-    let mut transfer_paths = Vec::new();
+    let mut plan = BaseSyncPlan::default();
 
     let mut index = 0_u64;
     for relative_path in sorted_paths {
         index += 1;
-        let local_file = baseline_profile.join(&relative_path);
-        if should_transfer_remote_file(
-            &local_file,
-            remote_hashes
-                .get(&relative_path)
-                .map(String::as_str)
-                .unwrap_or_default(),
-        ) {
-            transfer_paths.push(relative_path.clone());
+        let remote_hash = remote_hashes
+            .get(&relative_path)
+            .map(String::as_str)
+            .unwrap_or_default();
+        if local_file_matches_hash(&baseline_profile.join(&relative_path), remote_hash) {
+            plan.seed_from_baseline.push(relative_path.clone());
+        } else if local_file_matches_hash(&base_cache_root.join(&relative_path), remote_hash) {
+            plan.seed_from_cache.push(relative_path.clone());
+        } else {
+            plan.transfer_paths.push(relative_path.clone());
         }
         if let Some(progress_ref) = progress.as_mut() {
             progress_ref.update(
                 index,
-                &format!("transfer_paths={}", transfer_paths.len()),
+                &format!(
+                    "transfer_paths={} seed_local={} seed_cache={}",
+                    plan.transfer_paths.len(),
+                    plan.seed_from_baseline.len(),
+                    plan.seed_from_cache.len()
+                ),
                 false,
             );
         }
     }
 
-    transfer_paths
+    plan
 }
 
 fn should_transfer_remote_session_json(local_json: &Path, remote_hash: &str) -> bool {
-    should_transfer_remote_file(local_json, remote_hash)
+    !local_file_matches_hash(local_json, remote_hash)
 }
 
-fn should_transfer_remote_file(local_file: &Path, remote_hash: &str) -> bool {
+fn local_file_matches_hash(local_file: &Path, remote_hash: &str) -> bool {
     if !local_file.exists() {
-        return true;
+        return false;
     }
     match sha256_file(local_file) {
-        Ok(local_hash) => local_hash != remote_hash,
-        Err(_) => true,
+        Ok(local_hash) => local_hash == remote_hash,
+        Err(_) => false,
+    }
+}
+
+fn seed_files_from_source(
+    source_root: &Path,
+    target_root: &Path,
+    relative_paths: &[String],
+    progress_label: &str,
+) -> Result<()> {
+    if relative_paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut progress = TerminalProgress::new(
+        progress_label,
+        Some(relative_paths.len() as u64),
+        "files",
+        ProgressColor::Blue,
+    );
+    for (index, relative_path) in relative_paths.iter().enumerate() {
+        let source = source_root.join(relative_path);
+        let target = target_root.join(relative_path);
+        let parent = target.parent().with_context(|| {
+            format!(
+                "Target path has no parent for seeded file {}",
+                target.display()
+            )
+        })?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create parent {}", parent.display()))?;
+        if target.exists() {
+            fs::remove_file(&target)
+                .with_context(|| format!("Failed to replace {}", target.display()))?;
+        }
+        if fs::hard_link(&source, &target).is_err() {
+            fs::copy(&source, &target).with_context(|| {
+                format!(
+                    "Failed to seed file {} from {}",
+                    target.display(),
+                    source.display()
+                )
+            })?;
+        }
+        progress.update((index + 1) as u64, "", false);
+    }
+    progress.finish(relative_paths.len() as u64, "seeded", true);
+    Ok(())
+}
+
+fn sync_remote_base_cache(
+    cache_root: &Path,
+    baseline_profile: &Path,
+    incremental_target_root: &Path,
+    plan: &BaseSyncPlan,
+) -> Result<()> {
+    seed_files_from_source(
+        baseline_profile,
+        cache_root,
+        &plan.seed_from_baseline,
+        "Base cache (local)",
+    )?;
+    seed_files_from_source(
+        incremental_target_root,
+        cache_root,
+        &plan.transfer_paths,
+        "Base cache (remote)",
+    )
+}
+
+fn resolve_remote_base_cache_path(remote_host: &str, remote_profile_path: &str) -> Result<PathBuf> {
+    let remote_name = remote_profile_name(remote_profile_path)?;
+    let host_key = sanitize_for_path_component(remote_host);
+    let profile_hash = sha256_text(remote_profile_path)
+        .chars()
+        .take(12)
+        .collect::<String>();
+    Ok(std::env::temp_dir()
+        .join("cowork-remote-base-cache")
+        .join(host_key)
+        .join(format!("{remote_name}-{profile_hash}")))
+}
+
+fn sanitize_for_path_component(value: &str) -> String {
+    let mut rendered = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric()
+            || character == '-'
+            || character == '_'
+            || character == '.'
+        {
+            rendered.push(character);
+        } else {
+            rendered.push('_');
+        }
+    }
+    if rendered.is_empty() {
+        "remote".to_string()
+    } else {
+        rendered
     }
 }
 
@@ -819,7 +970,7 @@ mod tests {
 
     use super::{
         build_remote_session_hash_command, build_remote_session_hash_command_with_parallel,
-        build_remote_tar_command, paths_to_transfer_for_remote_sessions,
+        build_remote_tar_command, paths_to_transfer_for_remote_sessions, plan_remote_base_sync,
         should_transfer_remote_session_json,
     };
 
@@ -938,6 +1089,62 @@ mod tests {
             &local_json,
             &sha256_text("same")
         ));
+    }
+
+    #[test]
+    fn plan_remote_base_sync_uses_baseline_then_cache_then_transfer() {
+        let tmp = tempdir().expect("tempdir");
+        let baseline = tmp.path().join("baseline");
+        let cache = tmp.path().join("cache");
+        fs::create_dir_all(&baseline).expect("create baseline root");
+        fs::create_dir_all(&cache).expect("create cache root");
+
+        let baseline_same = baseline.join("Local Storage/leveldb/CURRENT");
+        let baseline_changed = baseline.join("Local Storage/leveldb/LOG");
+        let cache_same = cache.join("Local Storage/leveldb/LOG");
+
+        fs::create_dir_all(
+            baseline_same
+                .parent()
+                .expect("baseline file should have parent"),
+        )
+        .expect("create baseline parent");
+        fs::create_dir_all(cache_same.parent().expect("cache file should have parent"))
+            .expect("create cache parent");
+
+        fs::write(&baseline_same, "same").expect("write baseline same");
+        fs::write(&baseline_changed, "old").expect("write baseline changed");
+        fs::write(&cache_same, "remote-log").expect("write cache same");
+
+        let hashes = HashMap::from([
+            (
+                "Local Storage/leveldb/CURRENT".to_string(),
+                sha256_text("same"),
+            ),
+            (
+                "Local Storage/leveldb/LOG".to_string(),
+                sha256_text("remote-log"),
+            ),
+            (
+                "Local Storage/leveldb/MANIFEST-000001".to_string(),
+                sha256_text("remote-new"),
+            ),
+        ]);
+
+        let plan = plan_remote_base_sync(&hashes, &baseline, &cache, None);
+
+        assert_eq!(plan.seed_from_baseline.len(), 1);
+        assert_eq!(plan.seed_from_cache.len(), 1);
+        assert_eq!(plan.transfer_paths.len(), 1);
+        assert!(plan
+            .seed_from_baseline
+            .contains(&"Local Storage/leveldb/CURRENT".to_string()));
+        assert!(plan
+            .seed_from_cache
+            .contains(&"Local Storage/leveldb/LOG".to_string()));
+        assert!(plan
+            .transfer_paths
+            .contains(&"Local Storage/leveldb/MANIFEST-000001".to_string()));
     }
 
     use std::collections::HashMap;
