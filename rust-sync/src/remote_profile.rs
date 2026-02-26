@@ -88,6 +88,7 @@ const NON_ESSENTIAL_CACHE_PATHS: [&str; 18] = [
     "$BASE_NAME/Network/Cache",
     "$BASE_NAME/Network/Cache/*",
 ];
+const REMOTE_HASH_XARGS_BATCH_SIZE: usize = 32;
 
 pub fn fetch_remote_profile(
     remote_host: &str,
@@ -534,7 +535,7 @@ fn build_remote_non_session_hash_command(
     };
 
     Ok(format!(
-        "PROFILE_PATH={profile_expr}; if [ ! -d \"$PROFILE_PATH\" ]; then echo \"Remote profile directory does not exist: $PROFILE_PATH\" 1>&2; exit 3; fi; {parallelism_block}if [ \"$PARALLELISM\" -lt 1 ] 2>/dev/null; then PARALLELISM=1; fi; cd \"$PROFILE_PATH\"; {find_expr} | xargs -0 -n 1 -P \"$PARALLELISM\" -I {{}} sh -c 'file=\"$1\"; hash=\"$(shasum -a {} \"$file\" | cut -d \" \" -f 1)\"; clean=\"${{file#./}}\"; printf \"%s\\t%s\\n\" \"$clean\" \"$hash\"' _ {{}}",
+        "PROFILE_PATH={profile_expr}; if [ ! -d \"$PROFILE_PATH\" ]; then echo \"Remote profile directory does not exist: $PROFILE_PATH\" 1>&2; exit 3; fi; {parallelism_block}if [ \"$PARALLELISM\" -lt 1 ] 2>/dev/null; then PARALLELISM=1; fi; cd \"$PROFILE_PATH\"; {find_expr} | xargs -0 -P \"$PARALLELISM\" -n {REMOTE_HASH_XARGS_BATCH_SIZE} sh -c 'for file in \"$@\"; do hash=\"$(shasum -a {} \"$file\" | cut -d \" \" -f 1)\"; clean=\"${{file#./}}\"; printf \"%s\\t%s\\n\" \"$clean\" \"$hash\"; done' sh",
         hash_algorithm.shasum_bits()
     ))
 }
@@ -544,7 +545,7 @@ fn build_remote_hash_xargs_pipeline(
     hash_algorithm: HashAlgorithm,
 ) -> String {
     format!(
-        "find local-agent-mode-sessions -type f -name 'local_*.json' -print0 | xargs -0 -n 1 -P {parallelism_expr} -I {{}} sh -c 'file=\"$1\"; hash=\"$(shasum -a {} \"$file\" | cut -d \" \" -f 1)\"; printf \"%s\\t%s\\n\" \"$file\" \"$hash\"' _ {{}}",
+        "find local-agent-mode-sessions -type f -name 'local_*.json' -print0 | xargs -0 -P {parallelism_expr} -n {REMOTE_HASH_XARGS_BATCH_SIZE} sh -c 'for file in \"$@\"; do hash=\"$(shasum -a {} \"$file\" | cut -d \" \" -f 1)\"; printf \"%s\\t%s\\n\" \"$file\" \"$hash\"; done' sh",
         hash_algorithm.shasum_bits()
     )
 }
@@ -1427,7 +1428,7 @@ mod tests {
         .expect("command should build");
         assert!(command.contains("command -v nproc"));
         assert!(command.contains("sysctl -n hw.ncpu"));
-        assert!(command.contains("xargs -0 -n 1 -P \"$PARALLELISM\""));
+        assert!(command.contains("xargs -0 -P \"$PARALLELISM\" -n 32"));
         assert!(command.contains("shasum -a 256"));
     }
 
@@ -1440,7 +1441,7 @@ mod tests {
         )
         .expect("command should build");
         assert!(command.contains("PARALLELISM=7"));
-        assert!(command.contains("xargs -0 -n 1 -P \"$PARALLELISM\""));
+        assert!(command.contains("xargs -0 -P \"$PARALLELISM\" -n 32"));
         assert!(command.contains("shasum -a 256"));
     }
 

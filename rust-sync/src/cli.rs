@@ -107,14 +107,14 @@ struct MergeArgs {
     #[arg(
         long = "parallel-remote",
         value_parser = parse_positive_usize,
-        help = "Maximum remote parallelism for session hashing (default: remote CPU core count)."
+        help = "Maximum remote parallelism for base/session hashing (default: remote CPU core count)."
     )]
     parallel_remote: Option<usize>,
     #[arg(
         long = "parallel-local",
         default_value_t = default_local_parallelism(),
         value_parser = parse_positive_usize,
-        help = "Maximum local parallelism for diff hashing (default: local CPU core count)."
+        help = "Maximum local parallelism for diff hashing + session merging (default: local CPU core count)."
     )]
     parallel_local: usize,
     #[arg(long = "apply", action = ArgAction::SetTrue)]
@@ -240,6 +240,7 @@ fn run_merge(args: MergeArgs) -> Result<()> {
         profile_a: profile_a.clone(),
         profile_b,
         output_profile,
+        parallel_local: args.parallel_local,
         include_sensitive_claude_credentials: args.include_sensitive_claude_credentials,
         base_source: args.base_source.clone(),
         browser_state_a_path: browser_state_a,

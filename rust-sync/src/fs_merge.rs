@@ -1,9 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{info, warn};
+use rayon::prelude::*;
 use serde_json::{Map, Value};
 use walkdir::WalkDir;
 
@@ -77,42 +80,72 @@ pub fn merge_session_trees(
     profile_b: &Path,
     output_profile: &Path,
     include_sensitive_claude_credentials: bool,
+    parallel_local: usize,
 ) -> Result<BTreeMap<String, SessionMergeResult>> {
     let records_a = discover_session_records(profile_a, "a")?;
     let records_b = discover_session_records(profile_b, "b")?;
 
-    let session_ids: BTreeSet<String> = records_a.keys().chain(records_b.keys()).cloned().collect();
+    let session_ids: Vec<String> = records_a
+        .keys()
+        .chain(records_b.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
 
-    let mut merged_results = BTreeMap::new();
-    let mut progress = TerminalProgress::new(
+    let progress = Arc::new(Mutex::new(TerminalProgress::new(
         "Merging sessions",
-        Some(session_ids.len() as u64),
+        if session_ids.is_empty() {
+            None
+        } else {
+            Some(session_ids.len() as u64)
+        },
         "sessions",
         ProgressColor::Green,
-    );
-    let mut index = 0_u64;
-    for session_id in session_ids {
-        let record_a = records_a.get(&session_id);
-        let record_b = records_b.get(&session_id);
+    )));
+    let merged_count = Arc::new(AtomicU64::new(0));
 
-        let result = match (record_a, record_b) {
-            (Some(a), Some(b)) => {
-                merge_shared_session(a, b, output_profile, include_sensitive_claude_credentials)?
-            }
-            (Some(a), None) => build_existing_result(output_profile, a),
-            (None, Some(b)) => copy_session_from_secondary(
-                b,
-                output_profile,
-                include_sensitive_claude_credentials,
-            )?,
-            (None, None) => continue,
-        };
+    let thread_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(parallel_local.max(1))
+        .build()
+        .with_context(|| "Failed to build local thread pool for session merge")?;
 
-        merged_results.insert(session_id, result);
-        index += 1;
-        progress.update(index, &format!("merged={}", merged_results.len()), false);
+    let merge_entries: Vec<Result<(String, SessionMergeResult)>> = thread_pool.install(|| {
+        session_ids
+            .par_iter()
+            .map(|session_id| {
+                let record_a = records_a.get(session_id);
+                let record_b = records_b.get(session_id);
+                let result = merge_single_session(
+                    record_a,
+                    record_b,
+                    output_profile,
+                    include_sensitive_claude_credentials,
+                )?;
+
+                let completed = merged_count.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Ok(mut progress_guard) = progress.lock() {
+                    progress_guard.update(completed, &format!("merged={completed}"), false);
+                }
+
+                Ok((session_id.clone(), result))
+            })
+            .collect()
+    });
+
+    let mut merged_results = BTreeMap::new();
+    for merge_entry in merge_entries {
+        let (session_id, merge_result) = merge_entry?;
+        merged_results.insert(session_id, merge_result);
     }
-    progress.finish(index, &format!("merged={}", merged_results.len()), true);
+
+    if let Ok(mut progress_guard) = progress.lock() {
+        progress_guard.finish(
+            merged_results.len() as u64,
+            &format!("merged={}", merged_results.len()),
+            true,
+        );
+    }
 
     info!(
         "Merged {} sessions into {}",
@@ -120,6 +153,24 @@ pub fn merge_session_trees(
         output_profile.display()
     );
     Ok(merged_results)
+}
+
+fn merge_single_session(
+    record_a: Option<&SessionSourceRecord>,
+    record_b: Option<&SessionSourceRecord>,
+    output_profile: &Path,
+    include_sensitive_claude_credentials: bool,
+) -> Result<SessionMergeResult> {
+    match (record_a, record_b) {
+        (Some(a), Some(b)) => {
+            merge_shared_session(a, b, output_profile, include_sensitive_claude_credentials)
+        }
+        (Some(a), None) => Ok(build_existing_result(output_profile, a)),
+        (None, Some(b)) => {
+            copy_session_from_secondary(b, output_profile, include_sensitive_claude_credentials)
+        }
+        (None, None) => bail!("Session merge expected at least one source record"),
+    }
 }
 
 fn build_session_record(
@@ -616,7 +667,7 @@ mod tests {
 
         copy_dir(&profile_a, &output)?;
 
-        let merged = merge_session_trees(&profile_a, &profile_b, &output, false)?;
+        let merged = merge_session_trees(&profile_a, &profile_b, &output, false, 2)?;
 
         let shared_json = output.join("local-agent-mode-sessions/user/org/local_shared.json");
         let shared_payload: Value = serde_json::from_str(&fs::read_to_string(shared_json)?)?;

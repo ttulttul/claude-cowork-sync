@@ -54,3 +54,5 @@
 - The local diff-hash scans (`Base diff` / `Session diff`) benefit from explicit local parallelism control; running hash checks through a bounded Rayon pool (`--parallel-local`) reduces long tail stalls from large LevelDB files.
 - Hash algorithm selection for incremental diffs should be applied symmetrically to both remote hash generation and local hash verification; exposing `--hash-algorithm` (default `sha256`, optional `sha1`) keeps correctness while enabling a faster non-adversarial path.
 - Blocking SSH scan phases can feel like hangs unless they render explicit progress labels; adding spinner stages for remote preflight and remote hash scans gives clear operator feedback before diff bars appear.
+- Session tree merge work is independent per session ID, so it can safely use local parallel workers (`--parallel-local`) to reduce merge wall time without changing merge semantics.
+- Remote hash scan throughput improves when each `xargs` worker hashes small batches of files instead of spawning a shell per file, which reduces process-launch overhead on both Linux and macOS remotes.

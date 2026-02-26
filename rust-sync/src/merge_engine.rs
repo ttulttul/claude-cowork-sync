@@ -24,6 +24,7 @@ pub struct MergeOptions {
     pub profile_a: PathBuf,
     pub profile_b: PathBuf,
     pub output_profile: PathBuf,
+    pub parallel_local: usize,
     pub include_sensitive_claude_credentials: bool,
     pub base_source: String,
     pub browser_state_a_path: Option<PathBuf>,
@@ -56,6 +57,7 @@ pub fn merge_profiles(options: &MergeOptions) -> Result<MergeSummary> {
         &options.profile_b,
         &options.output_profile,
         options.include_sensitive_claude_credentials,
+        options.parallel_local,
     )?;
 
     let (browser_output, merged_local_storage) = if options.skip_browser_state {
@@ -346,6 +348,7 @@ mod tests {
             profile_a,
             profile_b,
             output_profile: tmp.path().join("out"),
+            parallel_local: 1,
             include_sensitive_claude_credentials: false,
             base_source: "a".to_string(),
             browser_state_a_path: None,
@@ -373,6 +376,7 @@ mod tests {
             profile_a,
             profile_b,
             output_profile: tmp.path().join("out"),
+            parallel_local: 1,
             include_sensitive_claude_credentials: false,
             base_source: "a".to_string(),
             browser_state_a_path: None,
@@ -406,6 +410,7 @@ mod tests {
             profile_a,
             profile_b,
             output_profile: tmp.path().join("out"),
+            parallel_local: 1,
             include_sensitive_claude_credentials: false,
             base_source: "a".to_string(),
             browser_state_a_path: None,
