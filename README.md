@@ -93,6 +93,8 @@ Rust browser-state behavior:
 - Rust remote hash scans now batch files per `xargs` worker process to reduce shell spawn overhead during `Remote base hash scan` and `Remote session hash scan`.
 - Rust now shows explicit parse spinners after remote hash scans and live per-file `Base diff` / `Session diff` progress while local parallel hash comparison planning is running (no long silent gap before diff bars advance).
 - Rust terminal progress now clears line-overwrite artifacts correctly even when ANSI colorized status text changes line length between updates.
+- Rust session merge now parallelizes per-file secondary-tree reconciliation within each session (for `uploads/`, `outputs/`, and `.claude/` payload files), not just per-session.
+- Rust secondary-file merge now uses metadata-first short-circuits (size/inode/mtime) to avoid unnecessary full-file hashing on unchanged or obviously-different files.
 
 ## Swift GUI app (macOS)
 

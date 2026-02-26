@@ -58,3 +58,5 @@
 - Remote hash scan throughput improves when each `xargs` worker hashes small batches of files instead of spawning a shell per file, which reduces process-launch overhead on both Linux and macOS remotes.
 - The local planning phase after remote hash scans should emit its own progress (including hash-output parsing heartbeat and in-flight diff counters from worker threads), otherwise large runs appear stalled even though CPU-bound comparison work is actively running.
 - Terminal overwrite padding must be based on visible character width (ANSI-stripped), not raw string byte length, otherwise colorized status transitions can leave stale trailing characters on reused lines.
+- Session-level parallelism alone can still bottleneck when a few sessions contain many payload files; adding per-file parallel reconciliation inside each session improves utilization for skewed workloads.
+- In secondary payload reconciliation, checking metadata first (size mismatch => different, shared inode/mtime match => equal) avoids many expensive full-hash comparisons while preserving deterministic conflict naming.

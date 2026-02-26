@@ -27,6 +27,19 @@ struct AuditLine {
     timestamp: Option<i64>,
 }
 
+#[derive(Debug, Clone)]
+struct SecondaryMergeEntry {
+    source_file: PathBuf,
+    target_file: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuickCompareResult {
+    Equal,
+    Different,
+    NeedsHashing,
+}
+
 pub fn discover_session_records(
     profile_dir: &Path,
     source_label: &str,
@@ -508,6 +521,7 @@ fn merge_secondary_folder_files(
         return Ok(());
     }
 
+    let mut merge_entries = Vec::new();
     for entry in WalkDir::new(source_folder)
         .into_iter()
         .filter_map(|entry| entry.ok())
@@ -534,7 +548,35 @@ fn merge_secondary_folder_files(
             continue;
         }
 
-        merge_file_into_target(source_file, &target_folder.join(rel_path), source_label)?;
+        merge_entries.push(SecondaryMergeEntry {
+            source_file: source_file.to_path_buf(),
+            target_file: target_folder.join(rel_path),
+        });
+    }
+
+    if merge_entries.len() <= 1 {
+        for merge_entry in &merge_entries {
+            merge_file_into_target(
+                &merge_entry.source_file,
+                &merge_entry.target_file,
+                source_label,
+            )?;
+        }
+        return Ok(());
+    }
+
+    let outcomes: Vec<Result<()>> = merge_entries
+        .par_iter()
+        .map(|merge_entry| {
+            merge_file_into_target(
+                &merge_entry.source_file,
+                &merge_entry.target_file,
+                source_label,
+            )
+        })
+        .collect();
+    for outcome in outcomes {
+        outcome?;
     }
 
     Ok(())
@@ -557,11 +599,18 @@ fn merge_file_into_target(
         return Ok(());
     }
 
-    let source_hash = sha256_file(source_file)?;
-    let target_hash = sha256_file(target_file)?;
-    if source_hash == target_hash {
-        return Ok(());
-    }
+    let source_hash = match quick_compare_existing_target(source_file, target_file)? {
+        QuickCompareResult::Equal => return Ok(()),
+        QuickCompareResult::Different => sha256_file(source_file)?,
+        QuickCompareResult::NeedsHashing => {
+            let source_hash = sha256_file(source_file)?;
+            let target_hash = sha256_file(target_file)?;
+            if source_hash == target_hash {
+                return Ok(());
+            }
+            source_hash
+        }
+    };
 
     let conflict_target = conflict_path(target_file, source_label, &source_hash);
     ensure_parent(&conflict_target)?;
@@ -577,6 +626,10 @@ fn merge_file_into_target(
         return Ok(());
     }
 
+    if quick_compare_existing_target(source_file, &conflict_target)? == QuickCompareResult::Equal {
+        return Ok(());
+    }
+
     let existing_conflict_hash = sha256_file(&conflict_target)?;
     if existing_conflict_hash != source_hash {
         bail!(
@@ -588,6 +641,38 @@ fn merge_file_into_target(
     Ok(())
 }
 
+fn quick_compare_existing_target(
+    source_file: &Path,
+    target_file: &Path,
+) -> Result<QuickCompareResult> {
+    let source_metadata = fs::metadata(source_file)
+        .with_context(|| format!("Failed to stat source file {}", source_file.display()))?;
+    let target_metadata = fs::metadata(target_file)
+        .with_context(|| format!("Failed to stat target file {}", target_file.display()))?;
+
+    if source_metadata.len() != target_metadata.len() {
+        return Ok(QuickCompareResult::Different);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if source_metadata.dev() == target_metadata.dev()
+            && source_metadata.ino() == target_metadata.ino()
+        {
+            return Ok(QuickCompareResult::Equal);
+        }
+    }
+
+    let source_modified = source_metadata.modified().ok();
+    let target_modified = target_metadata.modified().ok();
+    if source_modified.is_some() && source_modified == target_modified {
+        return Ok(QuickCompareResult::Equal);
+    }
+
+    Ok(QuickCompareResult::NeedsHashing)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -597,7 +682,7 @@ mod tests {
     use tempfile::tempdir;
     use walkdir::WalkDir;
 
-    use super::merge_session_trees;
+    use super::{merge_session_trees, quick_compare_existing_target, QuickCompareResult};
 
     #[test]
     fn merge_session_trees_merges_metadata_audit_and_payloads() -> Result<()> {
@@ -722,6 +807,32 @@ mod tests {
             Some("cli-b")
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn quick_compare_existing_target_detects_different_size() -> Result<()> {
+        let tmp = tempdir()?;
+        let source = tmp.path().join("source.txt");
+        let target = tmp.path().join("target.txt");
+        fs::write(&source, b"abc")?;
+        fs::write(&target, b"abcd")?;
+
+        let compare = quick_compare_existing_target(&source, &target)?;
+        assert_eq!(compare, QuickCompareResult::Different);
+        Ok(())
+    }
+
+    #[test]
+    fn quick_compare_existing_target_detects_hardlink_equality() -> Result<()> {
+        let tmp = tempdir()?;
+        let source = tmp.path().join("source.txt");
+        let target = tmp.path().join("target.txt");
+        fs::write(&source, b"same-data")?;
+        fs::hard_link(&source, &target)?;
+
+        let compare = quick_compare_existing_target(&source, &target)?;
+        assert_eq!(compare, QuickCompareResult::Equal);
         Ok(())
     }
 
