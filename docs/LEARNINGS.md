@@ -51,3 +51,4 @@
 - Rust incremental remote fetch only activates when the CLI passes local `profile_a` as the baseline into remote-fetch planning; otherwise behavior silently falls back to full-profile SSH copy every run.
 - To reduce repeated non-session base transfers across `--merge-from` runs, it is effective to seed unchanged files from both local baseline and a persistent host/path-scoped local cache, then fetch only remaining remote misses.
 - Session re-transfer churn can persist even after base caching because merged local session metadata may not byte-match remote `local_*.json`; caching remote session trees by host/path and seeding when remote JSON hash matches eliminates repeated large session-delta downloads.
+- The local diff-hash scans (`Base diff` / `Session diff`) benefit from explicit local parallelism control; running hash checks through a bounded Rayon pool (`--parallel-local`) reduces long tail stalls from large LevelDB files.

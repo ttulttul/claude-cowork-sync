@@ -103,6 +103,13 @@ struct MergeArgs {
         help = "Maximum remote parallelism for session hashing (default: remote CPU core count)."
     )]
     parallel_remote: Option<usize>,
+    #[arg(
+        long = "parallel-local",
+        default_value_t = default_local_parallelism(),
+        value_parser = parse_positive_usize,
+        help = "Maximum local parallelism for diff hashing (default: local CPU core count)."
+    )]
+    parallel_local: usize,
     #[arg(long = "apply", action = ArgAction::SetTrue)]
     apply: bool,
     #[arg(long = "force", action = ArgAction::SetTrue)]
@@ -408,6 +415,7 @@ fn resolve_profile_b(
             Some(profile_a),
             args.include_cache_dirs,
             args.parallel_remote,
+            args.parallel_local,
         )?;
         *remote_tempdir = Some(tempdir);
         return Ok(fetched);
@@ -627,6 +635,12 @@ fn default_output_profile_path() -> PathBuf {
     std::env::temp_dir().join(format!("claude-cowork-merged-{timestamp}"))
 }
 
+fn default_local_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+}
+
 fn parse_positive_usize(raw: &str) -> std::result::Result<usize, String> {
     let parsed = raw
         .parse::<usize>()
@@ -640,8 +654,8 @@ fn parse_positive_usize(raw: &str) -> std::result::Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_positive_usize, requires_playwright_apply, requires_playwright_auto_export,
-        resolved_headless_browser_state, MergeArgs,
+        default_local_parallelism, parse_positive_usize, requires_playwright_apply,
+        requires_playwright_auto_export, resolved_headless_browser_state, MergeArgs,
     };
 
     #[test]
@@ -721,6 +735,7 @@ mod tests {
             include_vm_bundles: false,
             include_cache_dirs: false,
             parallel_remote: None,
+            parallel_local: default_local_parallelism(),
             apply: false,
             force: false,
             include_sensitive_claude_credentials: false,

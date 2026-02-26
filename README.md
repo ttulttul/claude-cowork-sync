@@ -85,6 +85,7 @@ Rust browser-state behavior:
 - Rust CLI now shows live terminal progress (spinners/bars) for merge stages, remote fetch streaming, and browser import/export when output is a TTY.
 - Rust `merge --merge-from` uses local profile A as an incremental baseline and transfers only changed remote non-session files plus changed/new remote session trees.
 - Rust `merge` supports `--parallel-remote <N>` to control remote hash parallelism during incremental transfer planning.
+- Rust `merge` supports `--parallel-local <N>` to parallelize local diff hashing during base/session planning.
 - Rust remote base-file planning now reuses a local host-scoped cache under the system temp directory, seeding unchanged files from local baseline or cache before SSH transfer to reduce repeated full base downloads.
 - Rust session-delta planning now also reuses a host-scoped local session cache, so unchanged remote sessions can be seeded locally instead of re-downloaded over SSH on subsequent runs.
 
@@ -259,6 +260,7 @@ Options:
 - `--skip-indexeddb`: merge LocalStorage but skip IndexedDB.
 - `--base-source {a|b}`: base profile for unknown localStorage keys.
 - `--parallel-remote <N>`: cap remote parallelism used for incremental remote hash scans.
+- `--parallel-local <N>`: cap local parallelism used for incremental diff hash checks.
 - `--log-level {DEBUG|INFO|WARNING|ERROR}`: CLI log verbosity.
   - Default is `WARNING`.
 - `--force`: overwrite existing output profile directory.
